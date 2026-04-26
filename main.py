@@ -26,7 +26,7 @@ class ProxyTestResult:
 
 def check_speed(p: SingBoxProxy):
     started = time.time()
-    response = p.request("GET", "http://ipv4.download.thinkbroadband.com/5MB.zip")
+    response = p.request("GET", "http://ipv4.download.thinkbroadband.com/5MB.zip", timeout=(10, 30))
     if response.status_code != 200:
         return None
     else:

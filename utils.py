@@ -1,4 +1,7 @@
+import os
 import time
+import requests
+import json
 from threading import Event, Thread, Lock
 
 class BaseProcess:
@@ -106,22 +109,80 @@ class BaseProcess:
     def subscribe(self, process:BaseProcess):
         process.add_listener(self)
 
+def download_if_modified(url, local_path, timeout=30):
+    """
+    Скачивает файл по URL и сохраняет в local_path, используя условные запросы HTTP.
+    Если файл уже существует и не изменился на сервере, скачивание не выполняется.
+    """
+    # Проверяем существование основного файла
+    file_exists = os.path.exists(local_path)
+    meta_path = local_path + '.meta'
+    headers = {}
+
+    # Если файл существует, пытаемся загрузить метаданные для условного запроса
+    if file_exists and os.path.exists(meta_path):
+        try:
+            with open(meta_path, 'r') as f:
+                meta = json.load(f)
+            if 'last_modified' in meta:
+                headers['If-Modified-Since'] = meta['last_modified']
+            if 'etag' in meta:
+                headers['If-None-Match'] = meta['etag']
+        except (json.JSONDecodeError, IOError):
+            # Если метафайл поврежден, игнорируем его
+            pass
+
+    # Выполняем GET-запрос с потоковой передачей
+    response = requests.get(url, headers=headers, stream=True, timeout=timeout)
+    response.raise_for_status()
+
+    # Обработка ответа
+    if response.status_code == 304:
+        return False
+    elif response.status_code == 200:
+        # Создаем директорию для файла, если необходимо
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        # Сохраняем содержимое
+        with open(local_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        # Сохраняем метаданные
+        meta = {}
+        if 'Last-Modified' in response.headers:
+            meta['last_modified'] = response.headers['Last-Modified']
+        if 'ETag' in response.headers:
+            meta['etag'] = response.headers['ETag']
+        with open(meta_path, 'w') as f:
+            json.dump(meta, f)
+        return True
+    else:
+        print(f"Unexpected status code: {response.status_code} {response.reason}")
 
 if __name__ == '__main__':
 
-    class Test(BaseProcess):
+    if True:
+        file_name = 'WHITE-CIDR-RU-all.txt'
+        url = f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}'
 
-        def __init__(self):
-            super().__init__()
-            self._next = None
-
-        def _process(self):
-            if self.reached(self._next):
-                print(time.time())
-                self._next = self.schedule_delay(3)
+        print( download_if_modified(url, file_name) )
 
 
-    t = Test()
-    t.start()
+    else:
 
-    t.join(20)
+        class Test(BaseProcess):
+
+            def __init__(self):
+                super().__init__()
+                self._next = None
+
+            def _process(self):
+                if self.reached(self._next):
+                    print(time.time())
+                    self._next = self.schedule_delay(3)
+
+
+        t = Test()
+        t.start()
+
+        t.join(20)

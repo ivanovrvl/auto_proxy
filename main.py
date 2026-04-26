@@ -2,7 +2,8 @@ import random
 import os
 import time
 from threading import Event
-from utils import BaseProcess
+from utils import BaseProcess, download_if_modified
+
 import requests
 from singbox2proxy import SingBoxProxy
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -175,10 +176,8 @@ class ProxyChecker(BaseProcess):
             self._next_check = self.schedule_delay(3600 if not debug else 60)
 
     def _fetch_proxies(self, file_name:str):
-        r = requests.get(f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}')
-        r.raise_for_status()
-        with open(file_name, 'wb') as f:
-            f.write(r.content)
+        file_name = 'WHITE-CIDR-RU-all.txt'
+        return download_if_modified(f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}', file_name)
 
     def _load_proxies(self, file_name:str)->[str]:
         with open(file_name, 'r') as f:

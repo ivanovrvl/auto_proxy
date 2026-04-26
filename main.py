@@ -41,11 +41,11 @@ def check_proxy(url:str) -> ProxyTestResult:
     res.url = url
     res.is_ok = False
     try:
-        p = SingBoxProxy(url)
-        response = p.request("GET", "https://api.ipify.org?format=json", timeout=(5, 5))
-        if response.status_code == 200:
-            res.quality = check_speed(p)
-            res.is_ok = res.quality is not None
+        with SingBoxProxy(url) as p:
+            response = p.request("GET", "https://api.ipify.org?format=json", timeout=(5, 5))
+            if response.status_code == 200:
+                res.quality = check_speed(p)
+                res.is_ok = res.quality is not None
     except Exception as e:
         res.error = e
     return res
@@ -53,7 +53,7 @@ def check_proxy(url:str) -> ProxyTestResult:
 def kill_signbox_processes():
     os.system('taskkill /f /im sing-box.exe')
 
-def check_proxies(proxy_urls:[str], max_workers:int=20):
+def check_proxies(proxy_urls:[str], max_workers:int=10):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(check_proxy, url) for url in proxy_urls]
         for res in as_completed(futures):

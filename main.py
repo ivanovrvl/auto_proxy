@@ -53,7 +53,7 @@ def check_proxy(url:str) -> ProxyTestResult:
 def kill_signbox_processes():
     os.system('taskkill /f /im sing-box.exe')
 
-def check_proxies(proxy_urls:[str], max_workers:int=10):
+def check_proxies(proxy_urls:[str], max_workers:int=20):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(check_proxy, url) for url in proxy_urls]
         for res in as_completed(futures):

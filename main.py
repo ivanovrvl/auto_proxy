@@ -322,17 +322,25 @@ if __name__ == '__main__':
     class HTTPServer(SimpleHTTPRequestHandler):
 
         def do_GET(self):
-            res = {
-                "InternetChecker": wl_checker.get_status(),
-                "ProxyChecker": proxy_checker.get_status(),
-                "SingboxController": proxy_controller.get_status(),
-            }
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            data = json.dumps(res, ensure_ascii=True, indent=4).encode()
-            print(data)
-            self.wfile.write(data)
+            if self.path == '/' or self.path == '/status':
+                res = {
+                    "InternetChecker": wl_checker.get_status(),
+                    "ProxyChecker": proxy_checker.get_status(),
+                    "SingboxController": proxy_controller.get_status(),
+                }
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                data = json.dumps(res, ensure_ascii=True, indent=4).encode()
+                print(data)
+                self.wfile.write(data)
+            elif self.path == '/proxies':
+                proxies = proxy_checker.check_results
+                self.send_response(200)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                for p in proxies:
+                    self.wfile.write(f"{p.url}\n")
 
     with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
         httpd.serve_forever()

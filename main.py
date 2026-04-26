@@ -160,6 +160,10 @@ class ProxyChecker(BaseProcess):
 
         #with open('selected-proxies.txt') as f:
 
+    def check(self):
+        self._next_check = None
+        self.signal()
+
     def _process(self):
 
         is_whitelists = False
@@ -338,8 +342,13 @@ if __name__ == '__main__':
                 self.send_response(200)
                 self.send_header('Content-type', 'text/plain')
                 self.end_headers()
-                for p in proxies:
-                    self.wfile.write(f"{p.url}\n")
+                self.wfile.write(('\n'.join([p.url for p in proxies])).encode())
+            elif self.path == '/check':
+                proxy_checker.check()
+                self.send_response(200)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b"Ok")
 
     with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
         httpd.serve_forever()

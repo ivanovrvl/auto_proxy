@@ -123,6 +123,8 @@ class ProxyChecker(BaseProcess):
         self._proxy_count = None
         self._proxy_selected = None
         self._completion_percent = None
+        self._process_started = None
+        self._process_stopped = None
 
     def _check(self):
         file_name = 'WHITE-CIDR-RU-all.txt'
@@ -131,6 +133,8 @@ class ProxyChecker(BaseProcess):
         except Exception as e:
             print(str(e))
             pass
+
+        self._process_started = datetime.now()
 
         proxies = self._load_proxies(file_name)
         if debug:
@@ -157,6 +161,8 @@ class ProxyChecker(BaseProcess):
         self.check_results = check_results
         self.check_results_version += 1
         self.notify_listeners()
+
+        self._process_stopped = datetime.now()
 
         #with open('selected-proxies.txt') as f:
 
@@ -207,6 +213,8 @@ class ProxyChecker(BaseProcess):
                 "best_url": check_results[0].url if len(check_results) != 0 else None,
                 "last_result": dt2str(self._last_result_at),
             },
+            "process_started": dt2str(self._process_started),
+            "process_stopped": dt2str(self._process_stopped),
             "last_error": str(self.get_last_error()),
         }
 

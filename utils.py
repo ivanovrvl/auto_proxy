@@ -14,12 +14,12 @@ class BaseProcess:
         self._thread = Thread(target=self.__process_internal__)
         self._thread.setDaemon(True)
         self._listeners = []
-        self.__next_process__ = None
-        self.__lock__ = Lock()
-        self.__signaled__ = 1
+        self.__next_start__ = None
+        self.__signaled__ = True
         self.__last_error__ = None
         self.__last_error_at__ = None
         self.sleep_on_error = 60
+        self._iddle_timeout = 60 # или None
 
     def _on_error(self, e:Exception):
         print(str(e))
@@ -30,8 +30,8 @@ class BaseProcess:
         pass
 
     def schedule_at(self, t:float):
-        if self.__next_process__ is None or self.__next_process__ > t:
-            self.__next_process__ = t
+        if self.__next_start__ is None or self.__next_start__ > t:
+            self.__next_start__ = t
 
     def reached(self, t:float):
         if t and t > time.time():
@@ -49,28 +49,19 @@ class BaseProcess:
 
     def __process_internal__(self):
         while True:
-            self._event.clear()
-            while self.__signaled__ == 0:
-                if self.__next_process__ is not None:
-                    dt = self.__next_process__ - time.time()
-                    if dt <= 0:
-                        self.signal()
-                        break
-                    self._event.wait(dt)
+            if not self.__signaled__ and not self._event.is_set():
+                if self.__next_start__ is None:
+                    self._event.wait(timeout=self._iddle_timeout)
                 else:
-                    if False:
-                        self._event.wait()
-                    else:
-                        if not self._event.wait(60):
-                            self.signal()
-                            break
-                self._event.clear()
+                    timeout = self.__next_start__ - time.time()
+                    if timeout > 0:
+                        self._event.wait(timeout=timeout)
+            self.__signaled__ = True
+            self._event.clear()
             try:
-                was_signaled = self.__signaled__
-                self.__next_process__ = None
+                self.__next_start__ = None
                 self._process_internal()
-                with self.__lock__:
-                    self.__signaled__ -= was_signaled
+                self.__signaled__ = False
             except Exception as e:
                 self.__last_error__ = e
                 self.__last_error_at__ = time.time()
@@ -161,7 +152,7 @@ def download_if_modified(url, local_path, timeout=30):
 
 if __name__ == '__main__':
 
-    if True:
+    if False:
         file_name = 'WHITE-CIDR-RU-all.txt'
         url = f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}'
 

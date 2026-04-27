@@ -85,12 +85,12 @@ def check_proxy(url:str) -> ProxyTestResult:
             if tc:
                 def terminate():
                     try:
-                        p.client.close()                        
+                        p.client.close()
                     except:
                         pass
                     p.client = None
                     if p.singbox_process:
-                        p.singbox_process.terminate()                    
+                        p.singbox_process.terminate()
                 tc.put(terminate)
             response = p.request("GET", "https://api.ipify.org?format=json", timeout=10)
             if response.status_code == 200:
@@ -143,7 +143,12 @@ class WhitelistChecker(BaseProcess):
         if self.reached(self._next):
             self.set_down(not self._check_url("https://ya.ru") and not self._check_url("https://ozon.ru"))
             if not self.is_down:
-                self.set_whitelists(not self._check_url("https://google.com") and not self._check_url("https://profinance.ru"))
+                t1 = self._check_url("https://google.com")
+                t2 = self._check_url("https://profinance.ru")
+                if t1 and t2:
+                    self.set_whitelists(False)
+                elif not (t1 or t2):
+                    self.set_whitelists(True)
             self._next = self.schedule_delay(60)
 
     def _on_error(self, e:Exception):

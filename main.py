@@ -13,8 +13,46 @@ from datetime import datetime
 
 from http.server import SimpleHTTPRequestHandler
 import socketserver
+from collections import deque
 
 debug = False
+
+class TimeoutController(BaseProcess):
+
+    def __init__(self, timeout:float):
+        super().__init__()
+        self._queue = deque()
+        self.timeout = timeout
+        self.sleep_on_error = 5
+        self._current = None
+
+    def put(self, callback):
+        was_empty = False if self._queue else True
+        self._queue.append((time.time() + self.timeout, callback))
+        if was_empty:
+            self.signal()
+
+    def _process(self):
+        try:
+            while True:
+                if self._current is None:
+                    self._current = self._queue.pop()
+                    if self._current is None:
+                        break
+                if not self.reached(self._current[0]):
+                    break
+                try:
+                    self._current[1]()
+                except Exception:
+                    pass
+                self._current = None
+        except IndexError:
+            pass
+
+    def _on_error(self, e:Exception):
+        super()._on_error(e)
+
+timeout_controller: TimeoutController = None
 
 class ProxyTestResult:
     url: str
@@ -26,7 +64,7 @@ class ProxyTestResult:
 
 def check_speed(p: SingBoxProxy):
     started = time.time()
-    response = p.request("GET", "http://ipv4.download.thinkbroadband.com/5MB.zip", timeout=(10, 30))
+    response = p.request("GET", "http://ipv4.download.thinkbroadband.com/5MB.zip", timeout=30)
     if response.status_code != 200:
         return None
     else:
@@ -41,8 +79,20 @@ def check_proxy(url:str) -> ProxyTestResult:
     res.url = url
     res.is_ok = False
     try:
+        tc = timeout_controller
         with SingBoxProxy(url) as p:
-            response = p.request("GET", "https://api.ipify.org?format=json", timeout=(5, 5))
+            #p.client.auto_retry = False
+            if tc:
+                def terminate():
+                    try:
+                        p.client.close()                        
+                    except:
+                        pass
+                    p.client = None
+                    if p.singbox_process:
+                        p.singbox_process.terminate()                    
+                tc.put(terminate)
+            response = p.request("GET", "https://api.ipify.org?format=json", timeout=10)
             if response.status_code == 200:
                 res.quality = check_speed(p)
                 res.is_ok = res.quality is not None
@@ -147,7 +197,7 @@ class ProxyChecker(BaseProcess):
             check_results = []
             self._proxy_selected = 0
             proxy_checked = 0
-            for r in check_proxies(proxies):
+            for r in check_proxies(proxies, max_workers=1 if debug else 20):
                 proxy_checked += 1
                 self._completion_percent = int(100 * proxy_checked / self._proxy_count)
                 if r.is_ok:
@@ -190,7 +240,7 @@ class ProxyChecker(BaseProcess):
         return download_if_modified(f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}', file_name)
 
     def _load_proxies(self, file_name:str)->[str]:
-        with open(file_name, 'r') as f:
+        with open(file_name, 'r', encoding="utf-8") as f:
             proxies = []
             for line in f:
                 line = line.strip()
@@ -329,6 +379,9 @@ if __name__ == '__main__':
     proxy_checker.start()
     wl_checker.start()
     proxy_controller.start()
+
+#    timeout_controller = TimeoutController(5 if debug else 60)
+#    timeout_controller.start()
 
     class HTTPServer(SimpleHTTPRequestHandler):
 

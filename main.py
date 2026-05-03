@@ -16,7 +16,9 @@ from http.server import SimpleHTTPRequestHandler
 import socketserver
 from collections import deque
 
-debug = True
+import config
+
+debug = config.debug
 persist_checklist = True
 
 socks_proxy_port = 2080
@@ -541,6 +543,7 @@ class ProxyProcessController(BaseProcess):
         self._singbox = SingBoxProxy(None)
         self._process_started = None
         self._process_stopped = None
+        self._last_config = None
 
     def _check_process(self)->bool:
         if not self.__process__:
@@ -558,15 +561,18 @@ class ProxyProcessController(BaseProcess):
         self.__process__.terminate()
 
     def _make_config(self, proxy_url:str):
-
         self._singbox.socks_port = 2080
         self._singbox.http_port = None
         self._singbox.config_url = proxy_url
         config = self._singbox.generate_config()
         config['inbounds'][0]['listen']='::'
+        tls = config['outbounds'][0].get('tls')
+        if tls:
+            tls['insecure']=True
         file_name = os.path.join(self._config_dir, "signbox_config.json")
-        with open(file_name, 'w') as f:
-            json.dump(config, f)
+        if self._last_config != config:
+            with open(file_name, 'w') as f:
+                json.dump(config, f)
         return file_name
 
     def _process(self):
@@ -584,7 +590,7 @@ class ProxyProcessController(BaseProcess):
         else:
             self._used_proxy = self._proxy
             #subprocess.Popen(commands, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd = cwd, env = env)
-            config_file = self._make_config(self._used_proxy)
+            config_file = self._make_config(self._used_proxy if self._used_proxy else config.default_proxy)
             command = ['sing-box', 'run', '-c', config_file, '-D', self._config_dir]
             self.__process__ = subprocess.Popen(command, stderr=subprocess.STDOUT)
             self._process_started = datetime.now()
@@ -604,7 +610,6 @@ class ProxyProcessController(BaseProcess):
             "process_stopped": dt2str(self._process_stopped),
             "last_error": str(self.get_last_error()),
         }
-
 
 if __name__ == '__main__':
 

@@ -16,7 +16,7 @@ from http.server import SimpleHTTPRequestHandler
 import socketserver
 from collections import deque
 
-debug = False
+debug = True
 persist_checklist = True
 
 socks_proxy_port = 2080
@@ -140,6 +140,7 @@ class InternetChecker(BaseProcess):
         self.is_down = True
         self._next = None
         self.restored_count=0
+        self.__debug_whitelists = self.schedule_delay(5) if debug else None
 
     def _check_urls(self, urls:list[str])->bool:
         try:
@@ -165,15 +166,18 @@ class InternetChecker(BaseProcess):
         self.notify_listeners()
 
     def _process(self):
+        if self.__debug_whitelists and not self.is_whitelists and self.reached(self.__debug_whitelists):
+            self.set_whitelists(True)
         if self.reached(self._next):
             self.set_down(not self._check_urls(["https://ya.ru", "https://lenta.ru"]))
             if not self.is_down:
-                t1 = self._check_urls(["https://google.com"])
-                t2 = self._check_urls(["https://profinance.ru"])
-                if t1 and t2:
-                    self.set_whitelists(False)
-                elif not (t1 or t2):
-                    self.set_whitelists(True)
+                if not debug:
+                    t1 = self._check_urls(["https://google.com"])
+                    t2 = self._check_urls(["https://profinance.ru"])
+                    if t1 and t2:
+                        self.set_whitelists(False)
+                    elif not (t1 or t2):
+                        self.set_whitelists(True)
             self._next = self.schedule_delay(60)
 
     def _on_error(self, e:Exception):
@@ -305,8 +309,6 @@ class ProxyListChecker(BaseProcess):
         check_results = []
         self._proxy_selected = 0
         proxy_checked = 0
-#        if debug:
-#            proxy_list = proxy_list[:100]
         for r in test_proxies(proxy_list, max_workers=20):
             if self.internet_checker.is_down or last_restored_count != self.internet_checker.restored_count:
                 return None
@@ -380,7 +382,7 @@ class ProxyListChecker(BaseProcess):
                 self.notify_listeners()
                 if persist_checklist:
                     self.__save__()
-                self._next_check = self.schedule_delay(3600 if not debug else 60)
+                self._next_check = self.schedule_delay(3600)
 
 class ProxyInfo:
 
@@ -454,59 +456,63 @@ class ProxySelector(BaseProcess):
 
     def _process(self):
 
-        if self.internet_checker:
-            internet_restored_count = self.internet_checker.restored_count
-            if self.__internet_restored_count__ != internet_restored_count:
-                self.bad_list={}
-                self.__internet_restored_count__ = internet_restored_count
-
-        check_results_version = self.__plc__.check_results_version
-        if self.proxy_list_version != check_results_version:
-            self.bad_list={}
-            self.proxy_list = self.__plc__.check_results
-            self.proxy_list_version = check_results_version
-
-        found = True
-        while len(self.checklist) < 3 and found:
-            found = False
-            for p in self.proxy_list:
-                i = self.find_info(p.url)
-                if not i:
-                    p2 = ProxyInfo(p)
-                    self.checklist.append(p2)
-                    found = True
-                    break
-
-        if not found:
-            if self.__recheck_requested_for_version__ != check_results_version:
-                self.__plc__.check()
-                self.__recheck_requested_for_version__ = check_results_version
-
-        checklist:list[ProxyInfo]=[]
-        for p in self.checklist:
-            if self.reached(p.next_check):
-                checklist.append(p)
-        
-        if len(checklist) > 0:
-            for p, r in zip(checklist, check_proxies([p.url() for p in checklist])):
-                suc = r==200
-                p.set_check_result(suc)
-                if p.is_bad():                    
-                    self.checklist.remove(p)
-                    self.bad_list[p.url]=p
-                    if self.selected and self.selected.url == p.url():
-                        self._set_selected(None)
-                    self.signal()
-                else:
-                    p.next_check = self.schedule_delay(30 if suc else 10)
-
         if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
             self._set_selected(None)
         else:
-            if len(self.checklist) > 0:
-                p = self.checklist[0]
-                if p.is_good():
-                    self._set_selected(p.proxy)
+
+            if self.internet_checker:
+                internet_restored_count = self.internet_checker.restored_count
+                if self.__internet_restored_count__ != internet_restored_count:
+                    self.bad_list={}
+                    self.__internet_restored_count__ = internet_restored_count
+
+            check_results_version = self.__plc__.check_results_version
+            if self.proxy_list_version != check_results_version:
+                self.bad_list={}
+                self.proxy_list = self.__plc__.check_results
+                self.proxy_list_version = check_results_version
+
+            found = True
+            while len(self.checklist) < 3 and found:
+                found = False
+                for p in self.proxy_list:
+                    i = self.find_info(p.url)
+                    if not i:
+                        p2 = ProxyInfo(p)
+                        self.checklist.append(p2)
+                        found = True
+                        break
+
+            if not found:
+                if self.__recheck_requested_for_version__ != check_results_version:
+                    self.__plc__.check()
+                    self.__recheck_requested_for_version__ = check_results_version
+
+            checklist:list[ProxyInfo]=[]
+            for p in self.checklist:
+                if self.reached(p.next_check):
+                    checklist.append(p)
+            
+            if len(checklist) > 0:
+                for p, r in zip(checklist, check_proxies([p.url() for p in checklist])):
+                    suc = r==200
+                    p.set_check_result(suc)
+                    if p.is_bad():                    
+                        self.checklist.remove(p)
+                        self.bad_list[p.url]=p
+                        if self.selected and self.selected.url == p.url():
+                            self._set_selected(None)
+                        self.signal()
+                    else:
+                        p.next_check = self.schedule_delay(30 if suc else 10)
+
+            if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
+                self._set_selected(None)
+            else:
+                if len(self.checklist) > 0:
+                    p = self.checklist[0]
+                    if p.is_good():
+                        self._set_selected(p.proxy)
 
     def get_status(self)->dict:
         selected = self.selected

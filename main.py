@@ -643,7 +643,7 @@ class Debug(BaseProcess):
     def __init__(self, internet_checker:InternetChecker):
         super().__init__()
         self.internet_checker = internet_checker
-        self._start_wl = self.schedule_delay(10)
+        self._start_wl = self.schedule_delay(5)
 
     def _process(self):
         if self._start_wl and self.reached(self._start_wl):

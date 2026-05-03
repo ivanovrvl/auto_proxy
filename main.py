@@ -550,6 +550,7 @@ class ProxySelector(BaseProcess):
             "proxy_list": len(self.proxy_list),
             "checklist": len(self.checklist),
             "bad_list": len(self.bad_list),
+            "last_error": str(self.get_last_error()),
         }
 
 class ProxyProcessController(BaseProcess):

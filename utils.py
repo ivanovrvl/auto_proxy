@@ -4,12 +4,39 @@ import requests
 import json
 from threading import Event, Thread, Lock
 
+class Listener:
+
+    def __init__(self, event:Event):
+        super().__init__()
+        self.event = event
+        self.signaled = True
+
+class Signaler:
+
+    def __init__(self):
+        super().__init__()
+        self.listeners:[Listener] = []
+
+    def signal(self):
+        try:
+            while True:
+                o:Listener = self.listeners.pop()
+                o.signaled = True
+                if o.event:
+                    o.event.set()
+        except IndexError:
+            pass
+
+    def add_listener(self, li:Listener):
+        self.listeners.append(li)
+
 class BaseProcess:
     pass
 
 class BaseProcess:
 
     def __init__(self):
+        super().__init__()
         self._event = Event()
         self._thread = Thread(target=self.__process_internal__)
         self._thread.setDaemon(True)
@@ -80,8 +107,6 @@ class BaseProcess:
         return self.__last_error_at__
 
     def signal(self):
-        with self.__lock__:
-            self.__signaled__ += 1
         self._event.set()
 
     def add_listener(self, listener:Event):
@@ -92,28 +117,26 @@ class BaseProcess:
 
     def notify_listeners(self):
         for o in self._listeners:
-            if isinstance(o, BaseProcess):
-                o.signal()
-            elif isinstance(o, Event):
-                o.set()
+            o.set()
 
     def subscribe(self, process:BaseProcess):
-        process.add_listener(self)
+        process.add_listener(self._event)
 
-def download_if_modified(url, local_path, timeout=30):
+    def unsubscribe(self, process:BaseProcess):
+        process.remove_listener(self._event)
+
+def download_if_modified(url, file_name:str, metafile_name:str, timeout=30, proxies=None):
     """
     Скачивает файл по URL и сохраняет в local_path, используя условные запросы HTTP.
     Если файл уже существует и не изменился на сервере, скачивание не выполняется.
     """
     # Проверяем существование основного файла
-    file_exists = os.path.exists(local_path)
-    meta_path = local_path + '.meta'
     headers = {}
 
     # Если файл существует, пытаемся загрузить метаданные для условного запроса
-    if file_exists and os.path.exists(meta_path):
+    if os.path.exists(metafile_name):
         try:
-            with open(meta_path, 'r') as f:
+            with open(metafile_name, 'r') as f:
                 meta = json.load(f)
             if 'last_modified' in meta:
                 headers['If-Modified-Since'] = meta['last_modified']
@@ -124,7 +147,7 @@ def download_if_modified(url, local_path, timeout=30):
             pass
 
     # Выполняем GET-запрос с потоковой передачей
-    response = requests.get(url, headers=headers, stream=True, timeout=timeout)
+    response = requests.get(url, headers=headers, stream=True, timeout=timeout, proxies=proxies)
     response.raise_for_status()
 
     # Обработка ответа
@@ -132,9 +155,9 @@ def download_if_modified(url, local_path, timeout=30):
         return False
     elif response.status_code == 200:
         # Создаем директорию для файла, если необходимо
-        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(metafile_name)), exist_ok=True)
         # Сохраняем содержимое
-        with open(local_path, 'wb') as f:
+        with open(file_name, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
@@ -144,7 +167,7 @@ def download_if_modified(url, local_path, timeout=30):
             meta['last_modified'] = response.headers['Last-Modified']
         if 'ETag' in response.headers:
             meta['etag'] = response.headers['ETag']
-        with open(meta_path, 'w') as f:
+        with open(metafile_name, 'w') as f:
             json.dump(meta, f)
         return True
     else:
@@ -166,11 +189,18 @@ if __name__ == '__main__':
             def __init__(self):
                 super().__init__()
                 self._next = None
+                self._next2 = None
 
             def _process(self):
+
                 if self.reached(self._next):
                     print(time.time())
                     self._next = self.schedule_delay(3)
+
+                if self.reached(self._next2):
+                    print(time.time())
+                    self._next2 = self.schedule_delay(5)
+
 
 
         t = Test()

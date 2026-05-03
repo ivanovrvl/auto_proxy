@@ -3,6 +3,7 @@ import os
 import time
 from threading import Event
 from utils import BaseProcess, download_if_modified
+import pickle
 
 import requests
 from singbox2proxy import SingBoxProxy
@@ -16,6 +17,11 @@ import socketserver
 from collections import deque
 
 debug = False
+persist_checklist = True
+
+socks_proxy_port = 2080
+proxy = f"socks5://127.0.0.1:{socks_proxy_port}"
+proxies = {"http":proxy, "https":proxy}
 
 class TimeoutController(BaseProcess):
 
@@ -59,6 +65,7 @@ class ProxyTestResult:
     is_ok: bool
     error: Exception
     quality: float
+
     def __repr__(self)->str:
         return self.url
 
@@ -74,7 +81,7 @@ def check_speed(p: SingBoxProxy):
         else:
             return 5.0 / t
 
-def check_proxy(url:str) -> ProxyTestResult:
+def test_proxy(url:str) -> ProxyTestResult:
     res = ProxyTestResult()
     res.url = url
     res.is_ok = False
@@ -103,34 +110,52 @@ def check_proxy(url:str) -> ProxyTestResult:
 def kill_signbox_processes():
     os.system('taskkill /f /im sing-box.exe')
 
-def check_proxies(proxy_urls:[str], max_workers:int=20):
+def test_proxies(proxy_urls:list[str], max_workers:int=20):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(check_proxy, url) for url in proxy_urls]
+        futures = [executor.submit(test_proxy, url) for url in proxy_urls]
         for res in as_completed(futures):
             yield res.result()
+
+def check_proxy(url:str)->int:
+    try:
+        with SingBoxProxy(url) as p:
+            response = p.request("GET", "https://api.ipify.org?format=json", timeout=10)
+            return response.status_code
+    except Exception as e:
+        print(str(e))
+        return -1
+
+def check_proxies(proxy_urls:list[str], max_workers:int=20)->list[int]:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return executor.map(check_proxy, proxy_urls)
 
 def dt2str(dt):
     return str(dt) if dt else None
 
-class WhitelistChecker(BaseProcess):
+class InternetChecker(BaseProcess):
 
     def __init__(self):
         super().__init__()
         self.is_whitelists = False
         self.is_down = True
         self._next = None
+        self.restored_count=0
 
-    def _check_url(self, url:str)->bool:
+    def _check_urls(self, urls:list[str])->bool:
         try:
-            r = requests.get("https://ya.ru")
-            return r.status_code == 200
+            for url in urls:
+                r = requests.get(url)
+                return True
         except Exception:
-            return False
+            pass
+        return False
 
     def set_down(self, is_down:bool):
         if self.is_down == is_down:
             return
         self.is_down = is_down
+        if not is_down:
+            self.restored_count += 1
         self.notify_listeners()
 
     def set_whitelists(self, is_whitelists:bool):
@@ -141,10 +166,10 @@ class WhitelistChecker(BaseProcess):
 
     def _process(self):
         if self.reached(self._next):
-            self.set_down(not self._check_url("https://ya.ru") and not self._check_url("https://ozon.ru"))
+            self.set_down(not self._check_urls(["https://ya.ru", "https://lenta.ru"]))
             if not self.is_down:
-                t1 = self._check_url("https://google.com")
-                t2 = self._check_url("https://profinance.ru")
+                t1 = self._check_urls(["https://google.com"])
+                t2 = self._check_urls(["https://profinance.ru"])
                 if t1 and t2:
                     self.set_whitelists(False)
                 elif not (t1 or t2):
@@ -162,89 +187,35 @@ class WhitelistChecker(BaseProcess):
             "last_error": str(self.get_last_error()),
         }
 
-class ProxyChecker(BaseProcess):
+class ProxyListLoader(BaseProcess):
 
-    def __init__(self, wl_checker:WhitelistChecker=None):
+    def __init__(self):
         super().__init__()
-        self.check_results:[ProxyTestResult] = []
-        self.check_results_version = 0
-        self.wl_checker = wl_checker
-        self._last_whitelist = False
-        if wl_checker:
-            self.subscribe(wl_checker)
-        self._next_check = None
-        self.sleep_on_error = 300
-        self._last_result_at = None
-        self._proxy_count = None
-        self._proxy_selected = None
-        self._completion_percent = None
-        self._process_started = None
-        self._process_stopped = None
+        self.proxy_list:list[str]=None
+        self.proxy_list_version = 0
+        self._next=None
 
-    def _check(self):
-        file_name = 'WHITE-CIDR-RU-all.txt'
-        try:
-            self._fetch_proxies(file_name)
-        except Exception as e:
-            print(str(e))
-            pass
-
-        self._process_started = datetime.now()
-
-        proxies = self._load_proxies(file_name)
-        if debug:
-            proxies = proxies[:50]
-        self._proxy_count = len(proxies)
-        if self._proxy_count == 0:
-            self._completion_percent = 100
-        else:
-            self._completion_percent = 0
-            check_results = []
-            self._proxy_selected = 0
-            proxy_checked = 0
-            for r in check_proxies(proxies, max_workers=1 if debug else 20):
-                proxy_checked += 1
-                self._completion_percent = int(100 * proxy_checked / self._proxy_count)
-                if r.is_ok:
-                    self._proxy_selected += 1
-                    check_results.append(r)
-
-        if len(check_results) != 0:
-            check_results = sorted(check_results, key=lambda r: r.quality, reverse=True)
-
-        self._last_result_at = datetime.now()
-        self.check_results = check_results
-        self.check_results_version += 1
-        self.notify_listeners()
-
-        self._process_stopped = datetime.now()
-
-        #with open('selected-proxies.txt') as f:
-
-    def check(self):
-        self._next_check = None
-        self.signal()
-
-    def _process(self):
-
-        is_whitelists = False
-        if wl_checker:
-            is_whitelists = wl_checker.is_whitelists
-            if self._last_whitelist != is_whitelists:
-                self._next_check = None
-            if self.wl_checker.is_down:
-                return
-
-        if self.reached(self._next_check):
-            self._check()
-            self._last_whitelist = is_whitelists
-            self._next_check = self.schedule_delay(3600 if not debug else 60)
+    def _fetch_proxies_internal(self, file_name:str, proxies=None):
+        tmp_file_name = "1.tmp"
+        if download_if_modified(
+            f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}',
+            tmp_file_name,
+            metafile_name=f"{file_name}.meta",
+            timeout=15,
+            proxies=proxies
+        ):
+            os.replace(tmp_file_name, file_name)
+            return True
+        return False
 
     def _fetch_proxies(self, file_name:str):
-        file_name = 'WHITE-CIDR-RU-all.txt'
-        return download_if_modified(f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}', file_name)
-
-    def _load_proxies(self, file_name:str)->[str]:
+        try:            
+            return self._fetch_proxies_internal(file_name)
+        except Exception as e:
+            print(str(e))
+            return self._fetch_proxies_internal(file_name, proxies=proxies)
+            
+    def _load_proxies(self, file_name:str)->list[str]:
         with open(file_name, 'r', encoding="utf-8") as f:
             proxies = []
             for line in f:
@@ -254,7 +225,61 @@ class ProxyChecker(BaseProcess):
                 if line.startswith('#'):
                     continue
                 proxies.append(line)
-            return proxies
+        self.proxy_list=proxies
+        self.proxy_list_version += 1
+        self.notify_listeners()
+
+    def _process(self):
+
+        if self.reached(self._next):
+
+            file_name = 'WHITE-CIDR-RU-all.txt'
+            try:
+                if self._fetch_proxies(file_name):
+                    self._load_proxies(file_name)
+                self._next = self.schedule_delay(15*60)
+            except Exception as e:
+                print(str(e))
+                self._next = self.schedule_delay(20)
+
+            if self.proxy_list is None:
+                try:
+                    self._load_proxies(file_name)
+                except Exception as e:
+                    print(str(e))
+                    self._next = self.schedule_delay(60)
+
+    def load(self):
+        self._next=None
+        self.signal()
+
+    def get_status(self)->dict:
+        return None
+
+class ProxyListChecker(BaseProcess):
+
+    def __init__(self, proxy_loader:ProxyListLoader, internet_checker:InternetChecker):
+        super().__init__()
+        self.proxy_loader = proxy_loader
+        self.subscribe(proxy_loader)
+        self.last_proxy_version=0
+
+        self.internet_checker = internet_checker
+        self.subscribe(internet_checker)
+        self._last_whitelist = False
+
+        self.check_results:list[ProxyTestResult] = []
+        self.check_results_version = 0        
+        self._next_check = None
+        self.sleep_on_error = 300
+        self._last_result_at = None
+        self._proxy_count = None
+        self._proxy_selected = None
+        self._completion_percent = None
+        self._check_started = None
+        self._check_completed = None
+        self.__loaded__=False
+        self.__internet_restored__=0
 
     def get_status(self)->dict:
         check_results = self.check_results
@@ -263,23 +288,243 @@ class ProxyChecker(BaseProcess):
             "checked_percent": self._completion_percent,
             "selected": self._proxy_selected,
             "output": {
-                "count": len(self.check_results),
+                "count": len(check_results),
                 "best_quality": check_results[0].quality if len(check_results) != 0 else None,
                 "best_url": check_results[0].url if len(check_results) != 0 else None,
                 "last_result": dt2str(self._last_result_at),
             },
-            "process_started": dt2str(self._process_started),
-            "process_stopped": dt2str(self._process_stopped),
+            "check_started": dt2str(self._check_started),
+            "check_completed": dt2str(self._check_completed),
             "last_error": str(self.get_last_error()),
+        }        
+
+    def _check(self, proxy_list:list[str])->list[ProxyTestResult]:
+        if self.internet_checker.is_down:
+            return None
+        last_restored_count = self.internet_checker.restored_count
+        check_results = []
+        self._proxy_selected = 0
+        proxy_checked = 0
+#        if debug:
+#            proxy_list = proxy_list[:100]
+        for r in test_proxies(proxy_list, max_workers=20):
+            if self.internet_checker.is_down or last_restored_count != self.internet_checker.restored_count:
+                return None
+            proxy_checked += 1
+            self._completion_percent = int(100 * proxy_checked / self._proxy_count)
+            if r.is_ok:
+                self._proxy_selected += 1
+                check_results.append(r)
+        if self.internet_checker.is_down or last_restored_count != self.internet_checker.restored_count:
+            return None
+        return sorted(check_results, key=lambda r: r.quality, reverse=True)
+
+    def _process_check(self):
+        proxy_list = self.proxy_loader.proxy_list
+        self._check_started = datetime.now()
+        if proxy_list is None or len(proxy_list)==0:
+            check_results = []
+            self._completion_percent = 100
+            self._proxy_count = 0
+            self._check_completed = datetime.now()
+            return True
+        else:
+            self._proxy_count = len(proxy_list)
+            check_results = self._check(proxy_list)
+            if check_results is None:
+                return False
+            self._last_result_at = datetime.now()
+            self.check_results = check_results
+            return True
+
+    def check(self):
+        self._next_check = None
+        self.signal()
+
+    def __save__(self):
+        with open('check_results.pkl', 'wb') as f:
+            pickle.dump(self.check_results, f)
+
+    def __load__(self):
+        try:
+            with open('check_results.pkl', 'rb') as f:
+                loaded = pickle.load(f)            
+            if loaded and len(loaded) != 0:
+                self.check_results = loaded
+                self.check_results_version += 1
+                self.notify_listeners()
+        except:
+            pass
+
+    def _process(self):
+
+        if persist_checklist and not self.__loaded__:
+            self.__load__()
+            self.__loaded__ = True
+
+        whitelists = self.internet_checker.is_whitelists
+        internet_restored = self.internet_checker.restored_count
+        if self._last_whitelist != whitelists or self.__internet_restored__ != internet_restored:
+            self._next_check = None
+
+        proxy_list_version = self.proxy_loader.proxy_list_version
+        if self.last_proxy_version != proxy_list_version:
+            self._next_check = None
+
+        if not self.internet_checker.is_down and self.reached(self._next_check):
+            if self._process_check():
+                self.last_proxy_version = proxy_list_version
+                self._last_whitelist = whitelists
+                self.__internet_restored__ = internet_restored
+                self.check_results_version += 1
+                self.notify_listeners()
+                if persist_checklist:
+                    self.__save__()
+                self._next_check = self.schedule_delay(3600 if not debug else 60)
+
+class ProxyInfo:
+
+    def __init__(self, proxy:ProxyTestResult):
+        self.proxy = proxy
+        self.fail=0
+        self.success=0
+        self.last_result:bool=False
+        self.result_seq=0
+        self.next_check=None
+
+    def url(self):
+        return self.proxy.url
+
+    def set_check_result(self, success:bool):
+        if success:
+            self.success += 1
+        else:
+            self.fail += 1
+        if self.last_result != success:
+            self.result_seq = 1
+            self.last_result = success
+        else:
+            self.result_seq += 1
+
+    def is_bad(self)->bool:
+        return not self.last_result and self.result_seq >= 2
+    
+    def is_good(self)->bool:
+        return self.last_result and self.result_seq > 0
+
+class ProxySelector(BaseProcess):
+
+    def __init__(self, pl_checker:ProxyListChecker, internet_checker:InternetChecker=None):
+        super().__init__()
+        self.__plc__=pl_checker
+        self.subscribe(pl_checker)
+        self.internet_checker = internet_checker
+        if internet_checker:
+            self.subscribe(internet_checker)
+        self.__internet_restored_count__=0
+        self.proxy_list:list[ProxyTestResult]=[]
+        self.proxy_list_version=0
+        self.checklist:list[ProxyInfo] = []
+        self.bad_list:dict[str,ProxyInfo] = {}
+        self.selected:ProxyTestResult=None
+        self.selected_url:str=None
+        self.__recheck_requested_for_version__=0
+
+    def find_info(self, url:str)->ProxyInfo:
+        r = self.bad_list.get(url)
+        if r:
+            return r
+        for r in self.checklist:
+            if r.url() == url:
+                return r
+
+    def _set_selected(self, selected:ProxyTestResult):
+        if selected:
+            if self.selected and self.selected.url == selected.url:
+                self.selected = selected
+                self.selected_url = selected.url
+                return
+            self.selected = selected
+            self.selected_url = selected.url            
+        else:
+            if not self.selected:
+                return
+            self.selected = None
+        self.notify_listeners()
+
+    def _process(self):
+
+        if self.internet_checker:
+            internet_restored_count = self.internet_checker.restored_count
+            if self.__internet_restored_count__ != internet_restored_count:
+                self.bad_list={}
+                self.__internet_restored_count__ = internet_restored_count
+
+        check_results_version = self.__plc__.check_results_version
+        if self.proxy_list_version != check_results_version:
+            self.bad_list={}
+            self.proxy_list = self.__plc__.check_results
+            self.proxy_list_version = check_results_version
+
+        found = True
+        while len(self.checklist) < 3 and found:
+            found = False
+            for p in self.proxy_list:
+                i = self.find_info(p.url)
+                if not i:
+                    p2 = ProxyInfo(p)
+                    self.checklist.append(p2)
+                    found = True
+                    break
+
+        if not found:
+            if self.__recheck_requested_for_version__ != check_results_version:
+                self.__plc__.check()
+                self.__recheck_requested_for_version__ = check_results_version
+
+        checklist:list[ProxyInfo]=[]
+        for p in self.checklist:
+            if self.reached(p.next_check):
+                checklist.append(p)
+        
+        if len(checklist) > 0:
+            for p, r in zip(checklist, check_proxies([p.url() for p in checklist])):
+                suc = r==200
+                p.set_check_result(suc)
+                if p.is_bad():                    
+                    self.checklist.remove(p)
+                    self.bad_list[p.url]=p
+                    if self.selected and self.selected.url == p.url():
+                        self._set_selected(None)
+                    self.signal()
+                else:
+                    p.next_check = self.schedule_delay(30 if suc else 10)
+
+        if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
+            self._set_selected(None)
+        else:
+            if len(self.checklist) > 0:
+                p = self.checklist[0]
+                if p.is_good():
+                    self._set_selected(p.proxy)
+
+    def get_status(self)->dict:
+        selected = self.selected
+        return {
+            "selected": selected.url if selected else None,
+            "selected_quality": selected.quality if selected else None,
+            "proxy_list": len(self.proxy_list),
+            "checklist": len(self.checklist),
+            "bad_list": len(self.bad_list),
         }
 
 class ProxyProcessController(BaseProcess):
 
-    def __init__(self, checker: ProxyChecker):
+    def __init__(self, selector: ProxySelector):
         super().__init__()
-        self.checker = checker
-        if checker:
-            self.subscribe(checker)
+        self.selector = selector
+        if selector:
+            self.subscribe(selector)
         self.sleep_on_error = 5
         self._check_results_version = 0
         self._proxy:str = None
@@ -312,34 +557,16 @@ class ProxyProcessController(BaseProcess):
         self._singbox.http_port = None
         self._singbox.config_url = proxy_url
         config = self._singbox.generate_config()
-
+        config['inbounds'][0]['listen']='::'
         file_name = os.path.join(self._config_dir, "signbox_config.json")
         with open(file_name, 'w') as f:
             json.dump(config, f)
         return file_name
 
-    def _update_proxy(self):
-        plist:[ProxyTestResult] = self.checker.check_results
-        if self._proxy:
-            i = 0
-            while i < len(plist) and plist[i].url != self._proxy:
-                i += 1
-            if i < len(plist):
-                if plist[i].quality * 5 >=  plist[0].quality:
-                    return
-        if len(plist) == 0:
-            #self.set_proxy(None)
-            return
-        i = random.randint(0, len(plist)) if debug else 0
-        self.set_proxy(plist[i].url)
-
     def _process(self):
 
-        if self.checker:
-            v = self.checker.check_results_version
-            if v != self._check_results_version:
-                self._update_proxy()
-                self._check_results_version = v
+        if self.selector:
+            self._proxy= self.selector.selected_url
 
         has_process = self._check_process()
         if has_process:
@@ -377,45 +604,67 @@ if __name__ == '__main__':
 
     kill_signbox_processes()
 
-    wl_checker = WhitelistChecker()
-    proxy_checker = ProxyChecker(wl_checker)
-    proxy_controller = ProxyProcessController(proxy_checker)
+    if True:
 
-    proxy_checker.start()
-    wl_checker.start()
-    proxy_controller.start()
+        internet_checker = InternetChecker()
 
-#    timeout_controller = TimeoutController(5 if debug else 60)
-#    timeout_controller.start()
+        pl_loader = ProxyListLoader()
+        proxy_checker = ProxyListChecker(pl_loader, internet_checker)
+        proxy_selector = ProxySelector(proxy_checker, internet_checker)
+        proxy_controller = ProxyProcessController(proxy_selector)
 
-    class HTTPServer(SimpleHTTPRequestHandler):
+        pl_loader.start()
+        proxy_checker.start()
+        internet_checker.start()
+        proxy_selector.start()
+        proxy_controller.start()
 
-        def do_GET(self):
-            if self.path == '/' or self.path == '/status':
-                res = {
-                    "InternetChecker": wl_checker.get_status(),
-                    "ProxyChecker": proxy_checker.get_status(),
-                    "SingboxController": proxy_controller.get_status(),
-                }
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                data = json.dumps(res, ensure_ascii=True, indent=4).encode()
-                print(data)
-                self.wfile.write(data)
-            elif self.path == '/proxies':
-                proxies = proxy_checker.check_results
-                self.send_response(200)
-                self.send_header('Content-type', 'text/plain')
-                self.end_headers()
-                self.wfile.write(('\n'.join([p.url for p in proxies])).encode())
-            elif self.path == '/check':
-                proxy_checker.check()
-                self.send_response(200)
-                self.send_header('Content-type', 'text/plain')
-                self.end_headers()
-                self.wfile.write(b"Ok")
+        class HTTPServer(SimpleHTTPRequestHandler):
 
-    with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
-        httpd.serve_forever()
+            def do_GET(self):
+                if self.path == '/' or self.path == '/status':
+                    res = {
+                        "InternetChecker": internet_checker.get_status(),
+                        "ProxyListLoader": pl_loader.get_status(),
+                        "ProxyListChecker": proxy_checker.get_status(),
+                        "ProxySelector": proxy_selector.get_status(),
+                        "SingboxController": proxy_controller.get_status(),
+                    }
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    data = json.dumps(res, ensure_ascii=True, indent=4).encode()
+                    print(data)
+                    self.wfile.write(data)
+                elif self.path == '/proxies':
+                    proxies = proxy_checker.check_results
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(('\n'.join([p.url for p in proxies])).encode())
+                elif self.path == '/check':
+                    proxy_checker.check()
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(b"Ok")
+
+        with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
+            httpd.serve_forever()
+
+    else:
+        internet_checker = WhitelistChecker()
+
+        pll = ProxyListLoader()
+        ch = ProxyListChecker(pll, internet_checker)
+        sel = ProxySelector(ch)
+        proc = ProxyProcessController(sel)
+
+        pll.start()
+        ch.start()
+        internet_checker.start()
+        sel.start()
+        proc.start()
+
+        pll.join(1000)
 

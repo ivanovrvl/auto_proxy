@@ -201,7 +201,7 @@ class InternetChecker(BaseProcess):
             self.set_whitelists(True)
         else:
             self._next = None
-            self.signal()
+        self.signal()
 
 
 class ProxyListLoader(BaseProcess):
@@ -211,6 +211,9 @@ class ProxyListLoader(BaseProcess):
         self.proxy_list:list[str]=None
         self.proxy_list_version = 0
         self._next=None
+        self._load_started = None
+        self._load_completed = None
+        self._load_error = None
 
     def _fetch_proxies_internal(self, file_name:str, proxies=None):
         tmp_file_name = "1.tmp"
@@ -249,29 +252,41 @@ class ProxyListLoader(BaseProcess):
     def _process(self):
 
         if self.reached(self._next):
-
+            self._load_started = datetime.now()
             file_name = 'WHITE-CIDR-RU-all.txt'
             try:
                 if self._fetch_proxies(file_name):
                     self._load_proxies(file_name)
                 self._next = self.schedule_delay(15*60)
+                self._load_error = None
+                self._load_completed = datetime.now()
             except Exception as e:
-                print(str(e))
-                self._next = self.schedule_delay(20)
+                self._load_error = e
+                self._load_completed = datetime.now()                
+                self._next = self.schedule_delay(30)
 
             if self.proxy_list is None:
+                self._load_started = datetime.now()
                 try:
                     self._load_proxies(file_name)
+                    self._load_error = None
+                    self._load_completed = datetime.now()
                 except Exception as e:
-                    print(str(e))
-                    self._next = self.schedule_delay(60)
+                    self.proxy_list = []
+                    self._load_error = e
+                    self._load_completed = datetime.now()                
 
     def load(self):
         self._next=None
         self.signal()
 
     def get_status(self)->dict:
-        return None
+        return {
+            "load_started": dt2str(self._load_started),
+            "load_completed": dt2str(self._load_completed),
+            "load_error": str(self._load_error),
+            "last_error": str(self.get_last_error()),
+        }
 
 class ProxyListChecker(BaseProcess):
 
@@ -677,7 +692,6 @@ if __name__ == '__main__':
         class HTTPServer(SimpleHTTPRequestHandler):
 
             def do_GET(self):
-                redirect_to_root=False
                 if self.path == '/' or self.path == '/status':
                     res = {
                         "InternetChecker": internet_checker.get_status(),
@@ -692,30 +706,30 @@ if __name__ == '__main__':
                     data = json.dumps(res, ensure_ascii=True, indent=4).encode()
                     print(data)
                     self.wfile.write(data)
+                    return
                 elif self.path == '/save_check_results':
                     proxy_checker.save_check_results()
-                    redirect_to_root=True
                 elif self.path == '/set_wl':
                     internet_checker.set_debug_whitelists(True)
-                    redirect_to_root=True
                 elif self.path == '/reset_wl':
                     internet_checker.set_debug_whitelists(False)
-                    redirect_to_root=True
                 elif self.path == '/proxies':
                     proxies = proxy_checker.check_results
                     self.send_response(200)
                     self.send_header('Content-type', 'text/plain')
                     self.end_headers()
                     self.wfile.write(('\n'.join([p.url for p in proxies])).encode())
+                    return
                 elif self.path == '/check':
                     proxy_checker.check()
-                    redirect_to_root=True
                 else:
-                    raise Exception(f"Unknown request: {self.path}")
-                if redirect_to_root:
-                    self.send_response(301)
-                    self.send_header('Location', '/')
-                    self.end_headers()                
+                    self.send_response(404)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    return             
+                self.send_response(301)
+                self.send_header('Location', '/')
+                self.end_headers()                
 
         with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
             httpd.serve_forever()

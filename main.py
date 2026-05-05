@@ -704,7 +704,6 @@ if __name__ == '__main__':
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
                     data = json.dumps(res, ensure_ascii=True, indent=4).encode()
-                    print(data)
                     self.wfile.write(data)
                     return
                 elif self.path == '/save_check_results':

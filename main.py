@@ -347,10 +347,11 @@ class ProxyListChecker(BaseProcess):
         else:
             self._proxy_count = len(proxy_list)
             check_results = self._check(proxy_list)
+            self._check_completed = datetime.now()
             if check_results is None:
                 return False
             self._last_result_at = datetime.now()
-            self.check_results = check_results
+            self.check_results = check_results            
             return True
 
     def check(self):

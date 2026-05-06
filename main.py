@@ -689,6 +689,9 @@ if __name__ == '__main__':
             debug = Debug(internet_checker);
             debug.start()
 
+        def send_default_headers(self):
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+
         class HTTPServer(SimpleHTTPRequestHandler):
 
             def do_GET(self):
@@ -701,6 +704,7 @@ if __name__ == '__main__':
                         "SingboxController": proxy_controller.get_status(),
                     }
                     self.send_response(200)
+                    send_default_headers(self)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
                     data = json.dumps(res, ensure_ascii=True, indent=4).encode()
@@ -715,6 +719,7 @@ if __name__ == '__main__':
                 elif self.path == '/proxies':
                     proxies = proxy_checker.check_results
                     self.send_response(200)
+                    send_default_headers(self)
                     self.send_header('Content-type', 'text/plain')
                     self.end_headers()
                     self.wfile.write(('\n'.join([p.url for p in proxies])).encode())
@@ -723,6 +728,7 @@ if __name__ == '__main__':
                     proxy_checker.check()
                 else:
                     self.send_response(404)
+                    send_default_headers(self)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
                     return             

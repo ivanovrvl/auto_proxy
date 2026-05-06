@@ -88,7 +88,7 @@ def test_proxy(url:str) -> ProxyTestResult:
     res.is_ok = False
     try:
         tc = timeout_controller
-        with SingBoxProxy(url) as p:
+        with SingBoxProxy(url, tun_auto_route=False) as p:
             #p.client.auto_retry = False
             if tc:
                 def terminate():
@@ -119,7 +119,7 @@ def test_proxies(proxy_urls:list[str], max_workers:int=20):
 
 def check_proxy(url:str)->int:
     try:
-        with SingBoxProxy(url) as p:
+        with SingBoxProxy(url, tun_auto_route=False) as p:
             response = p.request("GET", "https://api.ipify.org?format=json", timeout=10)
             return response.status_code
     except Exception as e:
@@ -583,7 +583,7 @@ class ProxyProcessController(BaseProcess):
         self.__process__ = None
         self._exit_code = None
         self._config_dir = "."
-        self._singbox = SingBoxProxy(None)
+        self._singbox = SingBoxProxy(None, tun_auto_route=False, config_only=True)
         self._process_started = None
         self._process_stopped = None
         self._last_config = None

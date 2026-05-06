@@ -1,0 +1,4 @@
+singbox2proxy
+pysocks
+requests[socks]
+

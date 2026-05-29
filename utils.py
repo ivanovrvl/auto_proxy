@@ -144,9 +144,10 @@ class Watchdog(BaseProcess):
             if t is None:
                 self.__next_check__ = self.schedule_delay(self.timeout / 10)
             elif self.reached(t + self.timeout):
+                self.__next_check__ = None
                 self._on_timeout()
 
-    def _on_timeout():
+    def _on_timeout(self):
         sys.exit(254)
 
 def download_if_modified(url, file_name:str, metafile_name:str, timeout=30, proxies=None):

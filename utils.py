@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import requests
 import json
@@ -47,6 +48,7 @@ class BaseProcess:
         self.__last_error_at__ = None
         self.sleep_on_error = 60
         self._iddle_timeout = 60 # или None
+        self.__started_from__ = None
 
     def _on_error(self, e:Exception):
         print(str(e))
@@ -87,9 +89,12 @@ class BaseProcess:
             self._event.clear()
             try:
                 self.__next_start__ = None
+                self.__started_from__ = time.time()
                 self._process_internal()
+                self.__started_from__ = None
                 self.__signaled__ = False
             except Exception as e:
+                self.__started_from__ = None
                 self.__last_error__ = e
                 self.__last_error_at__ = time.time()
                 self._on_error(e)
@@ -124,6 +129,25 @@ class BaseProcess:
 
     def unsubscribe(self, process:BaseProcess):
         process.remove_listener(self._event)
+
+class Watchdog(BaseProcess):
+
+    def __init__(self, observable:BaseProcess, timeout:float):
+        super().__init__()
+        self.observable = observable
+        self.timeout = timeout
+        self.__next_check__ = None
+
+    def _process(self):
+        if self.reached(self.__next_check__):
+            t = self.observable.__started_from__
+            if t is None:
+                self.__next_check__ = self.schedule_delay(self.timeout / 10)
+            elif self.reached(t + self.timeout):
+                self._on_timeout()
+
+    def _on_timeout():
+        sys.exit(254)
 
 def download_if_modified(url, file_name:str, metafile_name:str, timeout=30, proxies=None):
     """
@@ -172,6 +196,7 @@ def download_if_modified(url, file_name:str, metafile_name:str, timeout=30, prox
         return True
     else:
         print(f"Unexpected status code: {response.status_code} {response.reason}")
+
 
 if __name__ == '__main__':
 

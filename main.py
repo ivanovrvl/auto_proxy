@@ -2,7 +2,7 @@ import random
 import os
 import time
 from threading import Event
-from utils import BaseProcess, download_if_modified
+from utils import BaseProcess, Watchdog, download_if_modified
 import pickle
 
 import requests
@@ -19,7 +19,7 @@ from collections import deque
 import config
 
 debug = config.debug
- 
+
 socks_proxy_port = 2080
 proxy = f"socks5://127.0.0.1:{socks_proxy_port}"
 proxies = {"http":proxy, "https":proxy}
@@ -142,11 +142,14 @@ class InternetChecker(BaseProcess):
         self._next = None
         self.restored_count=0
         self.__debug_whitelists__ = False
+        self.__last_check__ = None
+        self.__last_whitelist__ = None
+        self.__last_not_whitelist__ = None
 
     def _check_urls(self, urls:list[str])->bool:
         try:
             for url in urls:
-                r = requests.get(url)
+                r = requests.get(url, timeout=15)
                 return True
         except Exception as e:
             print(str(e))
@@ -164,10 +167,16 @@ class InternetChecker(BaseProcess):
         if self.is_whitelists == is_whitelists:
             return
         self.is_whitelists = is_whitelists
+        if is_whitelists:
+            self.__last_whitelist__ = datetime.now()
+        else:
+            self.__last_not_whitelist__ = datetime.now()
         self.notify_listeners()
 
     def _process(self):
         if self.reached(self._next):
+            self._next = self.schedule_delay(60)
+            self.__last_check__ = datetime.now()
             self.set_down(not self._check_urls(["https://ya.ru", "https://lenta.ru"]))
             if not self.is_down:
                 if self.__debug_whitelists__:
@@ -181,6 +190,7 @@ class InternetChecker(BaseProcess):
                         self.set_whitelists(True)
             self._next = self.schedule_delay(60)
 
+
     def _on_error(self, e:Exception):
         self.set_down(True)
         super()._on_error(e)
@@ -190,9 +200,12 @@ class InternetChecker(BaseProcess):
             "down": self.is_down,
             "whitelists": self.is_whitelists,
             "debug_whitelists": self.__debug_whitelists__,
+            "last_check": dt2str(self.__last_check__),
+            "last_whitelist": str(self.__last_whitelist__),
+            "last_not_whitelist": str(self.__last_not_whitelist__),
             "last_error": str(self.get_last_error()),
         }
-    
+
     def set_debug_whitelists(self, debug_whitelists:bool):
         if self.__debug_whitelists__ == debug_whitelists:
             return
@@ -229,12 +242,12 @@ class ProxyListLoader(BaseProcess):
         return False
 
     def _fetch_proxies(self, file_name:str):
-        try:            
+        try:
             return self._fetch_proxies_internal(file_name)
         except Exception as e:
             print(str(e))
             return self._fetch_proxies_internal(file_name, proxies=proxies)
-            
+
     def _load_proxies(self, file_name:str)->list[str]:
         with open(file_name, 'r', encoding="utf-8") as f:
             proxies = []
@@ -262,7 +275,7 @@ class ProxyListLoader(BaseProcess):
                 self._load_completed = datetime.now()
             except Exception as e:
                 self._load_error = e
-                self._load_completed = datetime.now()                
+                self._load_completed = datetime.now()
                 self._next = self.schedule_delay(30)
 
             if self.proxy_list is None:
@@ -274,7 +287,7 @@ class ProxyListLoader(BaseProcess):
                 except Exception as e:
                     self.proxy_list = []
                     self._load_error = e
-                    self._load_completed = datetime.now()                
+                    self._load_completed = datetime.now()
 
     def load(self):
         self._next=None
@@ -301,7 +314,7 @@ class ProxyListChecker(BaseProcess):
         self._last_whitelist = False
 
         self.check_results:list[ProxyTestResult] = []
-        self.check_results_version = 0        
+        self.check_results_version = 0
         self._next_check = None
         self.sleep_on_error = 300
         self._last_result_at = None
@@ -329,7 +342,7 @@ class ProxyListChecker(BaseProcess):
             "check_started": dt2str(self._check_started),
             "check_completed": dt2str(self._check_completed),
             "last_error": str(self.get_last_error()),
-        }        
+        }
 
     def _check(self, proxy_list:list[str])->list[ProxyTestResult]:
         if self.internet_checker.is_down:
@@ -366,7 +379,7 @@ class ProxyListChecker(BaseProcess):
             if check_results is None:
                 return False
             self._last_result_at = datetime.now()
-            self.check_results = check_results            
+            self.check_results = check_results
             return True
 
     def check(self):
@@ -381,7 +394,7 @@ class ProxyListChecker(BaseProcess):
     def __load__(self):
         try:
             with open('check_results.pkl', 'rb') as f:
-                loaded = pickle.load(f)            
+                loaded = pickle.load(f)
             if loaded and len(loaded) != 0:
                 self.check_results = loaded
                 self.check_results_version += 1
@@ -399,16 +412,16 @@ class ProxyListChecker(BaseProcess):
         internet_restored = self.internet_checker.restored_count
         if self._last_whitelist != whitelists or self.__internet_restored__ != internet_restored:
             self._next_check = None
+            self.__internet_restored__ = internet_restored
 
         proxy_list_version = self.proxy_loader.proxy_list_version
         if self.last_proxy_version != proxy_list_version:
             self._next_check = None
+            self.last_proxy_version = proxy_list_version
 
         if not self.internet_checker.is_down and self.reached(self._next_check):
             if self._process_check():
-                self.last_proxy_version = proxy_list_version
                 self._last_whitelist = whitelists
-                self.__internet_restored__ = internet_restored
                 self.check_results_version += 1
                 self.notify_listeners()
                 if config.persist_checklist:
@@ -417,12 +430,12 @@ class ProxyListChecker(BaseProcess):
 
         if self.__save_check_results__ and len(self.check_results) != 0:
             self.__save__()
-    
+
     def save_check_results(self):
         if self.self.__save_check_results__:
             return
         self.self.__save_check_results__=True
-        self.signal()        
+        self.signal()
 
 class ProxyInfo:
 
@@ -450,7 +463,7 @@ class ProxyInfo:
 
     def is_bad(self)->bool:
         return not self.last_result and self.result_seq >= 2
-    
+
     def is_good(self)->bool:
         return self.last_result and self.result_seq > 0
 
@@ -487,7 +500,7 @@ class ProxySelector(BaseProcess):
                 self.selected_url = selected.url
                 return
             self.selected = selected
-            self.selected_url = selected.url            
+            self.selected_url = selected.url
         else:
             if not self.selected:
                 return
@@ -536,12 +549,12 @@ class ProxySelector(BaseProcess):
             for p in self.checklist:
                 if self.reached(p.next_check):
                     checklist.append(p)
-            
+
             if len(checklist) > 0:
                 for p, r in zip(checklist, check_proxies([p.url() for p in checklist])):
                     suc = r==200
                     p.set_check_result(suc)
-                    if p.is_bad():                    
+                    if p.is_bad():
                         self.checklist.remove(p)
                         self.bad_list[p.url]=p
                         if self.selected and self.selected.url == p.url():
@@ -605,10 +618,11 @@ class ProxyProcessController(BaseProcess):
 
     def _make_config(self, proxy_url:str):
         self._singbox.socks_port = 2080
-        self._singbox.http_port = None
+        self._singbox.http_port = 2082
         self._singbox.config_url = proxy_url
         config = self._singbox.generate_config()
-        config['inbounds'][0]['listen']='::'
+        for inbound in config['inbounds']:
+            inbound['listen']='::'
         tls = config['outbounds'][0].get('tls')
         if tls:
             tls['insecure']=True
@@ -655,7 +669,7 @@ class ProxyProcessController(BaseProcess):
         }
 
 class Debug(BaseProcess):
-    
+
     def __init__(self, internet_checker:InternetChecker):
         super().__init__()
         self.internet_checker = internet_checker
@@ -678,12 +692,14 @@ if __name__ == '__main__':
         proxy_checker = ProxyListChecker(pl_loader, internet_checker)
         proxy_selector = ProxySelector(proxy_checker, internet_checker)
         proxy_controller = ProxyProcessController(proxy_selector)
+        whatchdog = Watchdog(proxy_checker, 60*60)
 
         pl_loader.start()
         proxy_checker.start()
         internet_checker.start()
         proxy_selector.start()
         proxy_controller.start()
+        whatchdog.start()
 
         if config.debug:
             debug = Debug(internet_checker);
@@ -692,7 +708,7 @@ if __name__ == '__main__':
         def send_default_headers(self):
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")            
+            self.send_header("Expires", "0")
 
         class HTTPServer(SimpleHTTPRequestHandler):
 
@@ -733,27 +749,16 @@ if __name__ == '__main__':
                     send_default_headers(self)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    return             
+                    return
                 self.send_response(301)
                 self.send_header('Location', '/')
-                self.end_headers()                
+                self.end_headers()
 
         with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
             httpd.serve_forever()
 
     else:
-        internet_checker = WhitelistChecker()
-
-        pll = ProxyListLoader()
-        ch = ProxyListChecker(pll, internet_checker)
-        sel = ProxySelector(ch)
-        proc = ProxyProcessController(sel)
-
-        pll.start()
-        ch.start()
+        internet_checker = InternetChecker()
         internet_checker.start()
-        sel.start()
-        proc.start()
-
-        pll.join(1000)
+        internet_checker.join(1000)
 

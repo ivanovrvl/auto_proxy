@@ -721,7 +721,7 @@ if __name__ == '__main__':
         whatchdog.start()
 
         if config.debug:
-            debug = Debug(internet_checker);
+            debug = Debug(internet_checker)
             debug.start()
 
         def send_default_headers(self):

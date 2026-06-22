@@ -21,6 +21,8 @@ import config
 debug = config.debug
 
 socks_proxy_port = 2080
+http_proxy_port = 2082
+
 proxy = f"socks5://127.0.0.1:{socks_proxy_port}"
 proxies = {"http":proxy, "https":proxy}
 
@@ -488,7 +490,7 @@ class ProxySelector(BaseProcess):
         self.selected:ProxyTestResult=None
         self.selected_url:str=None
         self.__recheck_requested_for_version__=0
-        
+
         self._primary_proxy = None
         if config.primary_proxy:
             t = ProxyTestResult()
@@ -634,8 +636,8 @@ class ProxyProcessController(BaseProcess):
         self.__process__.terminate()
 
     def _make_config(self, proxy_url:str):
-        self._singbox.socks_port = 2080
-        self._singbox.http_port = 2082
+        self._singbox.socks_port = socks_proxy_port
+        self._singbox.http_port = http_proxy_port
         self._singbox.config_url = proxy_url
         config = self._singbox.generate_config()
         for inbound in config['inbounds']:

@@ -301,6 +301,7 @@ class ProxyListLoader(BaseProcess):
             "last_error": str(self.get_last_error()),
         }
 
+
 class ProxyListChecker(BaseProcess):
 
     def __init__(self, proxy_loader:ProxyListLoader, internet_checker:InternetChecker):
@@ -441,11 +442,7 @@ class ProxyInfo:
 
     def __init__(self, proxy:ProxyTestResult):
         self.proxy = proxy
-        self.fail=0
-        self.success=0
-        self.last_result:bool=False
-        self.result_seq=0
-        self.next_check=None
+        self.clear()
 
     def url(self):
         return self.proxy.url
@@ -467,6 +464,13 @@ class ProxyInfo:
     def is_good(self)->bool:
         return self.last_result and self.result_seq > 0
 
+    def clear(self):
+        self.fail=0
+        self.success=0
+        self.last_result:bool=False
+        self.result_seq=0
+        self.next_check=None
+
 class ProxySelector(BaseProcess):
 
     def __init__(self, pl_checker:ProxyListChecker, internet_checker:InternetChecker=None):
@@ -484,6 +488,14 @@ class ProxySelector(BaseProcess):
         self.selected:ProxyTestResult=None
         self.selected_url:str=None
         self.__recheck_requested_for_version__=0
+        
+        self._primary_proxy = None
+        if config.primary_proxy:
+            t = ProxyTestResult()
+            t.url = config.primary_proxy
+            t.quality = 10
+            t.is_ok = True
+            self._primary_proxy = ProxyInfo(t)
 
     def find_info(self, url:str)->ProxyInfo:
         r = self.bad_list.get(url)
@@ -545,7 +557,9 @@ class ProxySelector(BaseProcess):
                     self.bad_list={}
                     self.__recheck_requested_for_version__ = check_results_version
 
-            checklist:list[ProxyInfo]=[]
+            checklist:list[ProxyInfo]= []
+            if self._primary_proxy:
+                checklist.append(self._primary_proxy)
             for p in self.checklist:
                 if self.reached(p.next_check):
                     checklist.append(p)
@@ -554,19 +568,22 @@ class ProxySelector(BaseProcess):
                 for p, r in zip(checklist, check_proxies([p.url() for p in checklist])):
                     suc = r==200
                     p.set_check_result(suc)
-                    if p.is_bad():
-                        self.checklist.remove(p)
-                        self.bad_list[p.url]=p
-                        if self.selected and self.selected.url == p.url():
-                            self._set_selected(None)
-                        self.signal()
-                    else:
-                        p.next_check = self.schedule_delay(30 if suc else 5)
+                    if p != self._primary_proxy:
+                        if p.is_bad():
+                            self.checklist.remove(p)
+                            self.bad_list[p.url]=p
+                            if self.selected and self.selected.url == p.url():
+                                self._set_selected(None)
+                            self.signal()
+                        else:
+                            p.next_check = self.schedule_delay(30 if suc else 5)
 
             if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
                 self._set_selected(None)
             else:
-                if len(self.checklist) > 0:
+                if self._primary_proxy and not self._primary_proxy.is_bad():
+                    self._set_selected(self._primary_proxy.proxy)
+                elif len(self.checklist) > 0:
                     p = self.checklist[0]
                     if p.is_good():
                         self._set_selected(p.proxy)

@@ -7,6 +7,7 @@ services:
     ports:
       - "2080:2080"
       - "2081:2081"
+    restart: unless-stopped
 
 networks:
   default:

@@ -24,6 +24,9 @@ socks_proxy_port = 2080
 proxy = f"socks5://127.0.0.1:{socks_proxy_port}"
 proxies = {"http":proxy, "https":proxy}
 
+with open('route.json', 'r') as f:
+    route_json = json.load(f)
+
 class TimeoutController(BaseProcess):
 
     def __init__(self, timeout:float):
@@ -643,10 +646,13 @@ class ProxyProcessController(BaseProcess):
         tls = config['outbounds'][0].get('tls')
         if tls:
             tls['insecure']=True
+        if route_json is not None:
+            config['route'] = route_json
+
         file_name = os.path.join(self._config_dir, "signbox_config.json")
         if self._last_config != config:
             with open(file_name, 'w') as f:
-                json.dump(config, f)
+                json.dump(config, f, indent=4)
         return file_name
 
     def _process(self):

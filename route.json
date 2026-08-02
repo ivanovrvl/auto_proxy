@@ -1,0 +1,15 @@
+{
+    "rules": [{
+            "ip_is_private": true,
+            "outbound": "direct"
+        }, {
+            "ip_cidr": [
+                "127.0.0.0/8",
+                "192.168.1.0/24",
+                "192.168.8.0/24",
+                "fc00::/7"
+            ],
+            "outbound": "direct"
+        }
+    ]
+}

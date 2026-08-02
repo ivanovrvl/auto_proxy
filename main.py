@@ -715,7 +715,7 @@ if __name__ == '__main__':
         proxy_checker = ProxyListChecker(pl_loader, internet_checker)
         proxy_selector = ProxySelector(proxy_checker, internet_checker)
         proxy_controller = ProxyProcessController(proxy_selector)
-        whatchdog = Watchdog(proxy_checker, 60*60)
+        whatchdog = Watchdog(proxy_checker, 10*60, 30*60)
 
         pl_loader.start()
         proxy_checker.start()
@@ -778,6 +778,7 @@ if __name__ == '__main__':
                 self.end_headers()
 
         with socketserver.TCPServer(("", 2081), HTTPServer) as httpd:
+            httpd.allow_reuse_address = True
             httpd.serve_forever()
 
     else:

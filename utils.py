@@ -4,6 +4,7 @@ import time
 import requests
 import json
 from threading import Event, Thread, Lock
+import psutil
 
 class Listener:
 
@@ -135,25 +136,25 @@ class BaseProcess:
 
 class Watchdog(BaseProcess):
 
-    def __init__(self, observable:BaseProcess, timeout:float):
+    def __init__(self, observable:BaseProcess, check_interval:float, timeout:float):
         super().__init__()
         self.observable = observable
         self.timeout = timeout
+        self.check_interval = check_interval
         self.__next_check__ = None
 
     def _process(self):
         if self.reached(self.__next_check__):
-            self.__next_check__ = self.schedule_delay(self.timeout / 10)
+            self.__next_check__ = self.schedule_delay(self.check_interval)
             t = self.observable.get_started_from()
             if t is not None and self.reached(t + self.timeout):
-                self.__next_check__ = self.schedule_delay(self.timeout / 10)
-                print("Watchdog timeout detected for " + str(self.observable))
-                self.__next_check__ = None
+                print("Watchdog timeout detected")
                 self._on_timeout()
-                
 
     def _on_timeout(self):
-        sys.exit(254)
+        parent = psutil.Process(os.getpid())
+        for child in parent.children(recursive=True):
+            child.kill()
 
 def download_if_modified(url, file_name:str, metafile_name:str, timeout=30, proxies=None):
     """

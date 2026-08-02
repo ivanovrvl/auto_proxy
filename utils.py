@@ -55,6 +55,9 @@ class BaseProcess:
         if self.sleep_on_error > 0:
             time.sleep(self.sleep_on_error)
 
+    def get_started_from(self):
+        return self.__started_from__
+
     def _process(self):
         pass
 
@@ -140,12 +143,14 @@ class Watchdog(BaseProcess):
 
     def _process(self):
         if self.reached(self.__next_check__):
-            t = self.observable.__started_from__
-            if t is None:
+            self.__next_check__ = self.schedule_delay(self.timeout / 10)
+            t = self.observable.get_started_from()
+            if t is not None and self.reached(t + self.timeout):
                 self.__next_check__ = self.schedule_delay(self.timeout / 10)
-            elif self.reached(t + self.timeout):
+                print("Watchdog timeout detected for " + str(self.observable))
                 self.__next_check__ = None
                 self._on_timeout()
+                
 
     def _on_timeout(self):
         sys.exit(254)

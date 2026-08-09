@@ -511,16 +511,16 @@ class ProxySelector(BaseProcess):
 
     def _set_selected(self, selected:ProxyTestResult, typ:str=None):
         if selected:
-            if self.selected and self.selected.url == selected.url and self.selected_url == typ:
+            if self.selected and self.selected.url == selected.url and self.selected_type == typ:
                 return
             self.selected = selected
             self.selected_url = selected.url
             self.selected_type = typ
         else:
-            if not self.selected and self.selected_url == typ:
+            if not self.selected and self.selected_type == typ:
                 return
-            self.selected_url = typ
-            self.selected_type = None
+            self.selected_url = None
+            self.selected_type = typ
             self.selected = None            
         self.notify_listeners()
 

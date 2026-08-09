@@ -6,6 +6,9 @@ import json
 from threading import Event, Thread, Lock
 import psutil
 
+def dt2str(dt):
+    return str(dt) if dt else None
+
 class Listener:
 
     def __init__(self, event:Event):
@@ -133,6 +136,14 @@ class BaseProcess:
 
     def unsubscribe(self, process:BaseProcess):
         process.remove_listener(self._event)
+
+    def get_status(self)->dict:
+        return {
+            "signaled": self.__signaled__,
+            "started_from": dt2str(self.__started_from__),
+            "next_start": dt2str(self.__next_start__),
+            "last_error": str(self.get_last_error()),
+        }
 
 class Watchdog(BaseProcess):
 

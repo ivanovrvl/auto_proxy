@@ -2,3 +2,4 @@ singbox2proxy
 pysocks
 requests[socks]
 psutil
+paho-mqtt

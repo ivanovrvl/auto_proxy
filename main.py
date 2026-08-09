@@ -17,6 +17,7 @@ import socketserver
 from collections import deque
 
 import config
+import paho.mqtt.client as mqtt
 
 debug = config.debug
 
@@ -140,7 +141,7 @@ class InternetChecker(BaseProcess):
 
     def __init__(self):
         super().__init__()
-        self.is_whitelists = False
+        self.is_whitelists = None
         self.is_down = True
         self._next = None
         self.restored_count=0
@@ -303,7 +304,6 @@ class ProxyListLoader(BaseProcess):
             "load_error": str(self._load_error),
             "last_error": str(self.get_last_error()),
         }
-
 
 class ProxyListChecker(BaseProcess):
 
@@ -491,6 +491,7 @@ class ProxySelector(BaseProcess):
         self.selected:ProxyTestResult=None
         self.selected_url:str=None
         self.__recheck_requested_for_version__=0
+        self.selected_type = None
         
         self._primary_proxy = None
         if config.primary_proxy:
@@ -508,27 +509,30 @@ class ProxySelector(BaseProcess):
             if r.url() == url:
                 return r
 
-    def _set_selected(self, selected:ProxyTestResult):
+    def _set_selected(self, selected:ProxyTestResult, typ:str=None):
         if selected:
-            if self.selected and self.selected.url == selected.url:
-                self.selected = selected
-                self.selected_url = selected.url
+            if self.selected and self.selected.url == selected.url and self.selected_url == typ:
                 return
             self.selected = selected
             self.selected_url = selected.url
+            self.selected_type = typ
         else:
-            if not self.selected:
+            if not self.selected and self.selected_url == typ:
                 return
-            self.selected = None
-            self.selected_url = None
+            self.selected_url = typ
+            self.selected_type = None
+            self.selected = None            
         self.notify_listeners()
 
     def _process(self):
 
-        if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
+        if self.internet_checker and (self.internet_checker.is_down or not self.internet_checker.is_whitelists):
             self.bad_list.clear()
             self.checklist.clear()
-            self._set_selected(None)
+            if self.internet_checker.is_down:
+                self._set_selected(None, "Нет интернета")
+            else:
+                self._set_selected(None, "Нет БС")
         else:
 
             if self.internet_checker:
@@ -576,20 +580,20 @@ class ProxySelector(BaseProcess):
                             self.checklist.remove(p)
                             self.bad_list[p.url]=p
                             if self.selected and self.selected.url == p.url():
-                                self._set_selected(None)
+                                self._set_selected(None, "Нет публичных прокси")
                             self.signal()
                         else:
                             p.next_check = self.schedule_delay(30 if suc else 5)
 
             if self.internet_checker and self.internet_checker.is_down or not self.internet_checker.is_whitelists:
-                self._set_selected(None)
+                self._set_selected(None, "Нет интернета")
             else:
                 if self._primary_proxy and not self._primary_proxy.is_bad():
-                    self._set_selected(self._primary_proxy.proxy)
+                    self._set_selected(self._primary_proxy.proxy, "WB Streams")
                 elif len(self.checklist) > 0:
                     p = self.checklist[0]
                     if p.is_good():
-                        self._set_selected(p.proxy)
+                        self._set_selected(p.proxy, "Публичная прокси")
 
     def get_status(self)->dict:
         selected = self.selected
@@ -691,6 +695,69 @@ class ProxyProcessController(BaseProcess):
             "last_error": str(self.get_last_error()),
         }
 
+class MqttSender(BaseProcess):
+
+    def __init__(self, config:dict, internet_checker:InternetChecker, proxy_selector:ProxySelector):
+        super().__init__()
+        self.internet_checker = internet_checker
+        self.proxy_selector = proxy_selector
+        self.subscribe(internet_checker)
+        self.subscribe(proxy_selector)
+        self.config = config
+        self._started = False
+        self._state = None
+
+    def _connect(self, client:mqtt.Client):
+        client.connect(self.config["address"], self.config.get("port", 1883), 60)
+
+    def _is_started(self):
+        if not self._started:
+            mq = mqtt.Client()
+            try:
+                self._connect(mq)
+                mq.publish("ha/sensor/internet_wl/config", 
+                    """{
+                    "name": "Белые списки",
+                    "unique_id": "internet_wl",
+                    "state_topic": "dacha/internet",
+                    "payload_on": "on",
+                    "payload_off": "off",
+                    "value_template": "{{ value_json.wl }}",
+                    "state_on": "on",
+                    "state_off": "off",
+                    "retain": true
+                    }""" 
+                )
+                mq.publish("ha/sensor/internet_proxy/config", 
+                    """{
+                    "name": "Интернет",
+                    "unique_id": "internet_proxy",
+                    "state_topic": "dacha/internet",
+                    "value_template": "{{ value_json.type }}",
+                    "retain": true
+                    }""" 
+                )                
+                self._started = True
+            finally:
+                mq.disconnect()
+        return self._started
+
+    def _process(self):
+        if self._is_started():
+            state = json.dumps({
+                "wl" : 'on' if self.internet_checker.is_whitelists else 'off',
+                "proxy_url" : self.proxy_selector.selected_url,
+                "type": self.proxy_selector.selected_type
+            })
+            if state != self._state:
+                mq = mqtt.Client()
+                try:
+                    self._connect(mq)
+                    mq.publish("dacha/internet", state)
+                    self._state = state
+                finally:
+                    mq.disconnect()                
+
 class Debug(BaseProcess):
 
     def __init__(self, internet_checker:InternetChecker):
@@ -716,6 +783,8 @@ if __name__ == '__main__':
         proxy_selector = ProxySelector(proxy_checker, internet_checker)
         proxy_controller = ProxyProcessController(proxy_selector)
         whatchdog = Watchdog(proxy_checker, 10*60, 30*60)
+        c = getattr(config, 'mqtt', None)
+        mqtt_sender = MqttSender(c, internet_checker, proxy_selector) if c else None
 
         pl_loader.start()
         proxy_checker.start()
@@ -723,6 +792,8 @@ if __name__ == '__main__':
         proxy_selector.start()
         proxy_controller.start()
         whatchdog.start()
+        if mqtt_sender:
+            mqtt_sender.start()
 
         if config.debug:
             debug = Debug(internet_checker)
@@ -744,6 +815,8 @@ if __name__ == '__main__':
                         "ProxySelector": proxy_selector.get_status(),
                         "SingboxController": proxy_controller.get_status(),
                     }
+                    if mqtt_sender:
+                        res["MqttSender"] = mqtt_sender.get_status()
                     self.send_response(200)
                     send_default_headers(self)
                     self.send_header('Content-type', 'application/json')
@@ -784,5 +857,12 @@ if __name__ == '__main__':
     else:
         internet_checker = InternetChecker()
         internet_checker.start()
+
+        config = {
+            "address": "192.168.1.1"
+        }
+        sender = MqttSender(config, internet_checker)
+        sender.start()
+
         internet_checker.join(1000)
 

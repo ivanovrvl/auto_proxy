@@ -706,6 +706,7 @@ class MqttSender(BaseProcess):
         self.config = config
         self._started = False
         self._state = None
+        self._next_send = None
 
     def _connect(self, client:mqtt.Client):
         client.connect(self.config["address"], self.config.get("port", 1883), 60)
@@ -749,14 +750,16 @@ class MqttSender(BaseProcess):
                 "proxy_url" : self.proxy_selector.selected_url,
                 "type": self.proxy_selector.selected_type
             })
-            if state != self._state:
+            if state != self._state or self.reached(self._next_send):                                
                 mq = mqtt.Client()
                 try:
                     self._connect(mq)
                     mq.publish("dacha/internet", state)
                     self._state = state
                 finally:
-                    mq.disconnect()                
+                    mq.disconnect()
+                self._next_send = self.schedule_delay(300)
+                self._state = state
 
 class Debug(BaseProcess):
 

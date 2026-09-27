@@ -600,6 +600,7 @@ class ProxySelector(BaseProcess):
         return {
             "selected": selected.url if selected else None,
             "selected_quality": selected.quality if selected else None,
+            "selected_type": self.selected_type,
             "proxy_list": len(self.proxy_list),
             "checklist": len(self.checklist),
             "bad_list": len(self.bad_list),
@@ -737,7 +738,7 @@ class MqttSender(BaseProcess):
                     "retain": true
                     }""" 
                 )
-                mq.publish("dacha/internet", state)              
+            mq.publish("dacha/internet", state)              
         finally:
             mq.disconnect()
 
@@ -816,7 +817,7 @@ if __name__ == '__main__':
                     send_default_headers(self)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    data = json.dumps(res, ensure_ascii=True, indent=4).encode()
+                    data = json.dumps(res, ensure_ascii=False, indent=4).encode()
                     self.wfile.write(data)
                     return
                 elif self.path == '/save_check_results':

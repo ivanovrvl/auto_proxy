@@ -704,18 +704,17 @@ class MqttSender(BaseProcess):
         self.subscribe(internet_checker)
         self.subscribe(proxy_selector)
         self.config = config
-        self._started = False
         self._state = None
         self._next_send = None
 
     def _connect(self, client:mqtt.Client):
         client.connect(self.config["address"], self.config.get("port", 1883), 60)
 
-    def _is_started(self):
-        if not self._started:
-            mq = mqtt.Client()
-            try:
-                self._connect(mq)
+    def _send(self, state:str, send_config:bool):
+        mq = mqtt.Client()
+        try:
+            self._connect(mq)
+            if send_config:
                 mq.publish("ha/sensor/internet_wl/config", 
                     """{
                     "name": "Белые списки",
@@ -737,29 +736,22 @@ class MqttSender(BaseProcess):
                     "value_template": "{{ value_json.type }}",
                     "retain": true
                     }""" 
-                )                
-                self._started = True
-            finally:
-                mq.disconnect()
-        return self._started
+                )
+                mq.publish("dacha/internet", state)              
+        finally:
+            mq.disconnect()
 
     def _process(self):
-        if self._is_started():
-            state = json.dumps({
-                "wl" : 'on' if self.internet_checker.is_whitelists else 'off',
-                "proxy_url" : self.proxy_selector.selected_url,
-                "type": self.proxy_selector.selected_type
-            })
-            if state != self._state or self.reached(self._next_send):                                
-                mq = mqtt.Client()
-                try:
-                    self._connect(mq)
-                    mq.publish("dacha/internet", state)
-                    self._state = state
-                finally:
-                    mq.disconnect()
-                self._next_send = self.schedule_delay(300)
-                self._state = state
+        state = json.dumps({
+            "wl" : 'on' if self.internet_checker.is_whitelists else 'off',
+            "proxy_url" : self.proxy_selector.selected_url,
+            "type": self.proxy_selector.selected_type
+        })
+        send_config = self.reached(self._next_send)
+        if state != self._state or send_config:
+            self._send(state, send_config)
+            self._state = state
+            self._next_send = self.schedule_delay(300)
 
 class Debug(BaseProcess):
 

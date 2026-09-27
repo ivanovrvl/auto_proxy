@@ -231,35 +231,42 @@ class ProxyListLoader(BaseProcess):
         self._load_started = None
         self._load_completed = None
         self._load_error = None
+        self.file_name = "proxies.txt"
+        self.file_url = "https://raw.githubusercontent.com/whoahaow/rjsxrd/refs/heads/main/githubmirror/bypass/bypass-all.txt"
+        #self.file_url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"        
 
-    def _fetch_proxies_internal(self, file_name:str, proxies=None):
+    def _fetch_proxies_internal(self, proxies=None):
         tmp_file_name = "1.tmp"
         if download_if_modified(
-            f'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/{file_name}',
+            self.file_url,
             tmp_file_name,
-            metafile_name=f"{file_name}.meta",
+            metafile_name=f"{self.file_name}.meta",
             timeout=15,
             proxies=proxies
         ):
-            os.replace(tmp_file_name, file_name)
+            os.replace(tmp_file_name, self.file_name)
             return True
         return False
 
-    def _fetch_proxies(self, file_name:str):
+    def _fetch_proxies(self):
         try:
-            return self._fetch_proxies_internal(file_name)
+            return self._fetch_proxies_internal()
         except Exception as e:
             print(str(e))
-            return self._fetch_proxies_internal(file_name, proxies=proxies)
+            return self._fetch_proxies_internal(proxies=proxies)
 
-    def _load_proxies(self, file_name:str)->list[str]:
-        with open(file_name, 'r', encoding="utf-8") as f:
+    def _load_proxies(self)->list[str]:
+        with open(self.file_name, 'r', encoding="utf-8") as f:
             proxies = []
             for line in f:
                 line = line.strip()
                 if len(line) == 0:
                     continue
-                if line.startswith('#'):
+                try:
+                    line = line[:line.index("#")]
+                except ValueError:
+                    pass
+                if len(line) == 0:
                     continue
                 proxies.append(line)
         self.proxy_list=proxies
@@ -270,10 +277,10 @@ class ProxyListLoader(BaseProcess):
 
         if self.reached(self._next):
             self._load_started = datetime.now()
-            file_name = 'WHITE-CIDR-RU-all.txt'
+
             try:
-                if self._fetch_proxies(file_name):
-                    self._load_proxies(file_name)
+                if self._fetch_proxies():
+                    self._load_proxies()
                 self._next = self.schedule_delay(15*60)
                 self._load_error = None
                 self._load_completed = datetime.now()
@@ -285,7 +292,7 @@ class ProxyListLoader(BaseProcess):
             if self.proxy_list is None:
                 self._load_started = datetime.now()
                 try:
-                    self._load_proxies(file_name)
+                    self._load_proxies()
                     self._load_error = None
                     self._load_completed = datetime.now()
                 except Exception as e:
@@ -356,6 +363,7 @@ class ProxyListChecker(BaseProcess):
         self._proxy_selected = 0
         proxy_checked = 0
         for r in test_proxies(proxy_list, max_workers=20):
+            self.heartbeat()
             if self.internet_checker.is_down or last_restored_count != self.internet_checker.restored_count:
                 return None
             proxy_checked += 1
@@ -778,7 +786,7 @@ if __name__ == '__main__':
         proxy_checker = ProxyListChecker(pl_loader, internet_checker)
         proxy_selector = ProxySelector(proxy_checker, internet_checker)
         proxy_controller = ProxyProcessController(proxy_selector)
-        whatchdog = Watchdog(proxy_checker, 10*60, 30*60)
+        whatchdog = Watchdog(proxy_checker, 60, 10*60)
         c = getattr(config, 'mqtt', None)
         mqtt_sender = MqttSender(c, internet_checker, proxy_selector) if c else None
 

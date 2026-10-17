@@ -796,11 +796,15 @@ class MqttSender(BaseProcess):
             self._send(mqtt, state, send_config)
             self._state = state
             self._ha_is_online_cnt = ha_is_online_cnt
-            self._next_send = self.schedule_delay(300)
+            if send_config:
+                self._next_send = self.schedule_delay(5)
+            else:
+                self._next_send = self.schedule_delay(300)
+
 
     def get_status(self)->dict:
         res = super().get_status()
-        res['internet_state'] = self._state_json
+        res['last_state'] = self._state_json
         return res
 
 class Debug(BaseProcess):

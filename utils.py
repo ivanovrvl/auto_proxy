@@ -53,14 +53,21 @@ class BaseProcess:
         self.sleep_on_error = 60
         self._iddle_timeout = 60 # или None
         self.__started_from__ = None
+        self.__last_heartbeat__ = None
 
     def _on_error(self, e:Exception):
         print(str(e))
         if self.sleep_on_error > 0:
             time.sleep(self.sleep_on_error)
 
+    def get_last_heartbeat(self):
+        return self.__last_heartbeat__
+
     def get_started_from(self):
         return self.__started_from__
+
+    def heartbeat(self):
+        self.__last_heartbeat__ = time.time()
 
     def _process(self):
         pass
@@ -158,9 +165,13 @@ class Watchdog(BaseProcess):
         if self.reached(self.__next_check__):
             self.__next_check__ = self.schedule_delay(self.check_interval)
             t = self.observable.get_started_from()
-            if t is not None and self.reached(t + self.timeout):
-                print("Watchdog timeout detected")
-                self._on_timeout()
+            if t is not None:
+                h = self.observable.get_last_heartbeat()
+                if h is not None and h > t:
+                    t = h
+                if self.reached(t + self.timeout):
+                    print("Watchdog timeout detected")
+                    self._on_timeout()
 
     def _on_timeout(self):
         parent = psutil.Process(os.getpid())

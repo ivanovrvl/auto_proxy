@@ -8,4 +8,6 @@ persist_checklist = False
 default_proxy = ?
 
 # приоритетная прокси на белых списках
-primary_proxy = "socks5://127.0.0.1:2088"
+#primary_proxy = "socks5://127.0.0.1:2088"
+
+#mqtt = {"address": "192.168.1.244"}

@@ -780,16 +780,13 @@ class MqttSender(BaseProcess):
         is_whitelists = self.internet_checker.is_whitelists
         if is_whitelists is None:
             return
-        selected_type = self.proxy_selector.selected_type
-        if selected_type is None:
-            return
         mqtt = self.mqtt_module.mqtt
         if mqtt is None:
             return
         state = json.dumps({
             "wl" : 'on' if is_whitelists else 'off',
             "proxy_url" : self.proxy_selector.selected_url,
-            "type": selected_type
+            "type": self.proxy_selector.selected_type
         })
         send_config = self._ha_is_online_cnt != self.mqtt_module.ha_is_online_cnt
         if state != self._state or send_config or self.reached(self._next_send):

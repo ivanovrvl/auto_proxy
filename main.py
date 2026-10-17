@@ -746,6 +746,7 @@ class MqttSender(BaseProcess):
         self.subscribe(mqtt_module)
         self.subscribe(internet_checker)
         self.subscribe(proxy_selector)
+        self._state_json = None
         self._state = None
         self._next_send = None
         self._ha_is_online_cnt = -1
@@ -784,17 +785,23 @@ class MqttSender(BaseProcess):
         if mqtt is None:
             return
         ha_is_online_cnt = self.mqtt_module.ha_is_online_cnt
-        state = json.dumps({
+        self._state_json = {
             "wl" : 'on' if is_whitelists else 'off',
             "proxy_url" : self.proxy_selector.selected_url,
             "type": self.proxy_selector.selected_type
-        })
+        }
+        state = json.dumps(self._state_json)
         send_config = self._ha_is_online_cnt != ha_is_online_cnt
         if state != self._state or send_config or self.reached(self._next_send):
             self._send(mqtt, state, send_config)
             self._state = state
             self._ha_is_online_cnt = ha_is_online_cnt
             self._next_send = self.schedule_delay(300)
+
+    def get_status(self)->dict:
+        res = super().get_status()
+        res['internet_state'] = self._state_json
+        return res
 
 class Debug(BaseProcess):
 

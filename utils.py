@@ -5,8 +5,11 @@ import requests
 import json
 from threading import Event, Thread, Lock
 import psutil
+from datetime import datetime
 
 def dt2str(dt):
+    if isinstance(dt, (int, float)):
+        dt = datetime.fromtimestamp(dt)
     return str(dt) if dt else None
 
 class Listener:
@@ -52,7 +55,9 @@ class BaseProcess:
         self.__last_error_at__ = None
         self.sleep_on_error = 60
         self._iddle_timeout = 60 # или None
-        self.__started_from__ = None
+        #self.__started_from__ = None
+        self.__last_start__ = None
+        self.__is_started__ = None
         self.__last_heartbeat__ = None
 
     def _on_error(self, e:Exception):
@@ -103,12 +108,13 @@ class BaseProcess:
             self._event.clear()
             try:
                 self.__next_start__ = None
-                self.__started_from__ = time.time()
+                self.__last_start__ = time.time()
+                self.__is_started__ = True
                 self._process_internal()
-                self.__started_from__ = None
+                self.__is_started__ = False
                 self.__signaled__ = False
             except Exception as e:
-                self.__started_from__ = None
+                self.__is_started__ = False
                 self.__last_error__ = e
                 self.__last_error_at__ = time.time()
                 self._on_error(e)
@@ -147,7 +153,8 @@ class BaseProcess:
     def get_status(self)->dict:
         return {
             "signaled": self.__signaled__,
-            "started_from": dt2str(self.__started_from__),
+            "started": self.__is_started__,
+            "last_start": dt2str(self.__last_start__),
             "next_start": dt2str(self.__next_start__),
             "last_error": str(self.get_last_error()),
         }

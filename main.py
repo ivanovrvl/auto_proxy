@@ -728,7 +728,7 @@ class MqttModule(BaseProcess):
             self.mqtt.connect(self.config["address"], self.config.get("port", 1883), 60)
             self.mqtt.on_message = self._on_message
             self.mqtt.subscribe("homeassistant/status")
-            self.mqtt.subscribe("homeassistant/#")
+            #self.mqtt.subscribe("homeassistant/#")
             self.notify_listeners()
             self.mqtt.loop_forever()
         finally:

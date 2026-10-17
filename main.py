@@ -753,11 +753,11 @@ class MqttSender(BaseProcess):
 
     def _send(self, mq, state:str, send_config:bool):
         if send_config:
-            mq.publish("homeassistant/sensor/internet_wl/config",
+            mq.publish("homeassistant/sensor/auto_proxy/wl/config",
                 """{
                 "name": "Белые списки",
                 "unique_id": "internet_wl",
-                "state_topic": "dacha/internet",
+                "state_topic": "sensors/auto_proxy/state",
                 "payload_on": "on",
                 "payload_off": "off",
                 "value_template": "{{ value_json.wl }}",
@@ -766,16 +766,16 @@ class MqttSender(BaseProcess):
                 "retain": true
                 }"""
             )
-            mq.publish("homeassistant/sensor/internet_proxy/config",
+            mq.publish("homeassistant/sensor/auto_proxy/proxy_type/config",
                 """{
                 "name": "Интернет",
                 "unique_id": "internet_proxy",
-                "state_topic": "dacha/internet",
+                "state_topic": "sensors/auto_proxy/state",
                 "value_template": "{{ value_json.type }}",
                 "retain": true
                 }"""
             )
-        mq.publish("dacha/internet", state)
+        mq.publish("sensors/auto_proxy/state", state)
 
     def _process(self):
         is_whitelists = self.internet_checker.is_whitelists

@@ -233,7 +233,7 @@ class ProxyListLoader(BaseProcess):
         self._load_error = None
         self.file_name = "proxies.txt"
         self.file_url = "https://raw.githubusercontent.com/whoahaow/rjsxrd/refs/heads/main/githubmirror/bypass/bypass-all.txt"
-        #self.file_url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"        
+        #self.file_url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"
 
     def _fetch_proxies_internal(self, proxies=None):
         tmp_file_name = "1.tmp"
@@ -500,7 +500,7 @@ class ProxySelector(BaseProcess):
         self.selected_url:str=None
         self.__recheck_requested_for_version__=0
         self.selected_type = None
-        
+
         self._primary_proxy = None
         if config.primary_proxy:
             t = ProxyTestResult()
@@ -529,7 +529,7 @@ class ProxySelector(BaseProcess):
                 return
             self.selected_url = None
             self.selected_type = typ
-            self.selected = None            
+            self.selected = None
         self.notify_listeners()
 
     def _process(self):
@@ -704,62 +704,98 @@ class ProxyProcessController(BaseProcess):
             "last_error": str(self.get_last_error()),
         }
 
-class MqttSender(BaseProcess):
+class MqttModule(BaseProcess):
 
-    def __init__(self, config:dict, internet_checker:InternetChecker, proxy_selector:ProxySelector):
+    def __init__(self, config:dict):
         super().__init__()
-        self.internet_checker = internet_checker
-        self.proxy_selector = proxy_selector
-        self.subscribe(internet_checker)
-        self.subscribe(proxy_selector)
         self.config = config
-        self._state = None
-        self._next_send = None
+        self.mqtt = None
+        self.ha_state = None
+        self.ha_is_online_cnt = 0
 
-    def _connect(self, client:mqtt.Client):
-        client.connect(self.config["address"], self.config.get("port", 1883), 60)
-
-    def _send(self, state:str, send_config:bool):
-        mq = mqtt.Client()
-        try:
-            self._connect(mq)
-            if send_config:
-                mq.publish("homeassistant/sensor/internet_wl/config", 
-                    """{
-                    "name": "Белые списки",
-                    "unique_id": "internet_wl",
-                    "state_topic": "dacha/internet",
-                    "payload_on": "on",
-                    "payload_off": "off",
-                    "value_template": "{{ value_json.wl }}",
-                    "state_on": "on",
-                    "state_off": "off",
-                    "retain": true
-                    }""" 
-                )
-                mq.publish("homeassistant/sensor/internet_proxy/config", 
-                    """{
-                    "name": "Интернет",
-                    "unique_id": "internet_proxy",
-                    "state_topic": "dacha/internet",
-                    "value_template": "{{ value_json.type }}",
-                    "retain": true
-                    }""" 
-                )
-            mq.publish("dacha/internet", state)              
-        finally:
-            mq.disconnect()
+    def _on_message(self, client, userdata, msg):
+        if msg.topic == 'homeassistant/status':
+            self.ha_state = msg.payload
+            if self.ha_state == b'online':
+                self.ha_is_online_cnt += 1
+            self.notify_listeners()
+            return
+        #print(f"Received `{msg.payload.decode()}` from `{msg.topic}` topic")
 
     def _process(self):
+        self.mqtt = mqtt.Client()
+        try:
+            self.mqtt.connect(self.config["address"], self.config.get("port", 1883), 60)
+            self.mqtt.on_message = self._on_message
+            self.mqtt.subscribe("homeassistant/status")
+            self.mqtt.subscribe("homeassistant/#")
+            self.notify_listeners()
+            self.mqtt.loop_forever()
+        finally:
+            self.mqtt.disconnect()
+            self.mqtt = None
+            self.notify_listeners()
+
+class MqttSender(BaseProcess):
+
+    def __init__(self, mqtt_module:MqttModule, internet_checker:InternetChecker, proxy_selector:ProxySelector):
+        super().__init__()
+        self.mqtt_module = mqtt_module
+        self.internet_checker = internet_checker
+        self.proxy_selector = proxy_selector
+        self.subscribe(mqtt_module)
+        self.subscribe(internet_checker)
+        self.subscribe(proxy_selector)
+        self._state = None
+        self._next_send = None
+        self._ha_is_online_cnt = -1
+
+    def _send(self, mq, state:str, send_config:bool):
+        if send_config:
+            mq.publish("homeassistant/sensor/internet_wl/config",
+                """{
+                "name": "Белые списки",
+                "unique_id": "internet_wl",
+                "state_topic": "dacha/internet",
+                "payload_on": "on",
+                "payload_off": "off",
+                "value_template": "{{ value_json.wl }}",
+                "state_on": "on",
+                "state_off": "off",
+                "retain": true
+                }"""
+            )
+            mq.publish("homeassistant/sensor/internet_proxy/config",
+                """{
+                "name": "Интернет",
+                "unique_id": "internet_proxy",
+                "state_topic": "dacha/internet",
+                "value_template": "{{ value_json.type }}",
+                "retain": true
+                }"""
+            )
+        mq.publish("dacha/internet", state)
+
+    def _process(self):
+        is_whitelists = self.internet_checker.is_whitelists
+        if is_whitelists is None:
+            return
+        selected_type = self.proxy_selector.selected_type
+        if selected_type is None:
+            return
+        mqtt = self.mqtt_module.mqtt
+        if mqtt is None:
+            return
         state = json.dumps({
-            "wl" : 'on' if self.internet_checker.is_whitelists else 'off',
+            "wl" : 'on' if is_whitelists else 'off',
             "proxy_url" : self.proxy_selector.selected_url,
-            "type": self.proxy_selector.selected_type
+            "type": selected_type
         })
-        send_config = self.reached(self._next_send)
-        if state != self._state or send_config:
-            self._send(state, send_config)
+        send_config = self._ha_is_online_cnt != self.mqtt_module.ha_is_online_cnt
+        if state != self._state or send_config or self.reached(self._next_send):
+            self._send(mqtt, state, send_config)
             self._state = state
+            self._ha_is_online_cnt = mqtt.ha_is_online_cnt
             self._next_send = self.schedule_delay(300)
 
 class Debug(BaseProcess):
@@ -787,8 +823,6 @@ if __name__ == '__main__':
         proxy_selector = ProxySelector(proxy_checker, internet_checker)
         proxy_controller = ProxyProcessController(proxy_selector)
         whatchdog = Watchdog(proxy_checker, 60, 10*60)
-        c = getattr(config, 'mqtt', None)
-        mqtt_sender = MqttSender(c, internet_checker, proxy_selector) if c else None
 
         pl_loader.start()
         proxy_checker.start()
@@ -796,8 +830,16 @@ if __name__ == '__main__':
         proxy_selector.start()
         proxy_controller.start()
         whatchdog.start()
-        if mqtt_sender:
+
+        c = getattr(config, 'mqtt', None)
+        if c:
+            mqtt_module = MqttModule(c)
+            mqtt_module.start()
+            mqtt_sender = MqttSender(mqtt_module, internet_checker, proxy_selector)
             mqtt_sender.start()
+        else:
+            mqtt_module = None
+            mqtt_sender = None
 
         if config.debug:
             debug = Debug(internet_checker)
@@ -819,6 +861,8 @@ if __name__ == '__main__':
                         "ProxySelector": proxy_selector.get_status(),
                         "SingboxController": proxy_controller.get_status(),
                     }
+                    if mqtt_module:
+                        res["MqttModule"] = mqtt_module.get_status()
                     if mqtt_sender:
                         res["MqttSender"] = mqtt_sender.get_status()
                     self.send_response(200)

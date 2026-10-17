@@ -783,16 +783,17 @@ class MqttSender(BaseProcess):
         mqtt = self.mqtt_module.mqtt
         if mqtt is None:
             return
+        ha_is_online_cnt = self.mqtt_module.ha_is_online_cnt
         state = json.dumps({
             "wl" : 'on' if is_whitelists else 'off',
             "proxy_url" : self.proxy_selector.selected_url,
             "type": self.proxy_selector.selected_type
         })
-        send_config = self._ha_is_online_cnt != self.mqtt_module.ha_is_online_cnt
+        send_config = self._ha_is_online_cnt != ha_is_online_cnt
         if state != self._state or send_config or self.reached(self._next_send):
             self._send(mqtt, state, send_config)
             self._state = state
-            self._ha_is_online_cnt = self.mqtt_module.ha_is_online_cnt
+            self._ha_is_online_cnt = ha_is_online_cnt
             self._next_send = self.schedule_delay(300)
 
 class Debug(BaseProcess):

@@ -757,7 +757,7 @@ class MqttSender(BaseProcess):
                 """{
                 "name": "Белые списки",
                 "unique_id": "internet_wl",
-                "state_topic": "sensors/auto_proxy/state",
+                "state_topic": "homeassistant/auto_proxy/state",
                 "payload_on": "on",
                 "payload_off": "off",
                 "value_template": "{{ value_json.wl }}",
@@ -770,12 +770,12 @@ class MqttSender(BaseProcess):
                 """{
                 "name": "Интернет",
                 "unique_id": "internet_proxy",
-                "state_topic": "sensors/auto_proxy/state",
+                "state_topic": "homeassistant/auto_proxy/state",
                 "value_template": "{{ value_json.type }}",
                 "retain": true
                 }"""
             )
-        mq.publish("sensors/auto_proxy/state", state)
+        mq.publish("homeassistant/auto_proxy/state", state)
 
     def _process(self):
         is_whitelists = self.internet_checker.is_whitelists
